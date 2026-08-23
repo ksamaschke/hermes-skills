@@ -13,6 +13,12 @@ The workflow skill is reusable only when project-specific decisions stay outside
 
 ## What belongs in project policy
 
+The Kanban section should also declare whether review is dispatched automatically:
+
+- `review_dispatch: false` when the orchestrator explicitly creates/assigns reviewer cards;
+- `review_dispatch: true` only when every review request carries a valid independent reviewer profile.
+
+
 Project policy should declare:
 
 - Forgejo/GitHub repository and base branch;
@@ -35,7 +41,7 @@ Do not launch a desktop shell merely because a task mentions the UI. First ident
 
 `deployment.mode: gitops_only` and `deployment.controller: argocd` are valid examples for projects whose live state is owned by Git and Argo CD. Another project may use Flux, a release pipeline, or a human-controlled deployment. The generic skill does not choose.
 
-If the deployment mode is `unspecified`, the agent may prepare or review artifacts but must not mutate production state.
+`release_only` is a policy value for projects where the repository produces artifacts but a separate release system performs rollout. `unspecified` is the safe default: prepare/review only, no production mutation.
 
 ## Profile reuse
 

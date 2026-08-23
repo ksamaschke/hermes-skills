@@ -1,19 +1,19 @@
 ---
 name: kanban-implementation-workflow
-description: "Use for Forgejo Kanban work with TDD and review."
+description: "Forgejo/GitHub Kanban work with TDD and review."
 version: 1.0.0
 author: Karsten Samaschke (ksamaschke), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
   hermes:
-    tags: [forgejo, kanban, orchestration, tdd, review, testing, gitops]
+    tags: [forgejo, github, kanban, orchestration, tdd, review, testing, gitops]
     related_skills: []
 ---
 
-# Forgejo + Hermes Kanban Implementation Workflow
+# Forgejo/GitHub + Hermes Kanban Implementation Workflow
 
-Use this skill when a Forgejo backlog should be implemented through Hermes Kanban workers while an orchestrator owns decomposition, verification, review, and delivery. The workflow is intentionally policy-driven: it does not assume a repository, branch, model vendor, deployment controller, or profile roster.
+Use this skill when a Forgejo or GitHub backlog should be implemented through Hermes Kanban workers while an orchestrator owns decomposition, verification, review, and delivery. The workflow is intentionally policy-driven: it does not assume a repository, branch, model vendor, deployment controller, or profile roster.
 
 ## When to use
 
@@ -31,7 +31,7 @@ Do not use it to bypass project rules, deploy without an approved rollout policy
 
 Resolve these before creating ready work:
 
-- tracker and repository identity;
+- tracker kind and repository identity (Forgejo or GitHub);
 - base/integration branch;
 - project-local instructions (`AGENTS.md`, `CLAUDE.md`, or equivalent);
 - headless test/build commands;
@@ -40,7 +40,21 @@ Resolve these before creating ready work:
 - implementer and independent reviewer profiles;
 - WIP and concurrency limits.
 
-If deployment policy is absent, do not mutate production state. Use `examples/project-policy.yaml` as a template, not as a universal policy.
+If deployment policy is absent, do not mutate production state. Use the public policy template at https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/examples/project-policy.yaml as a starting point, not as a universal policy.
+
+Requires: `git` and `hermes`; use `tea` for Forgejo or `gh` for GitHub.
+
+## Roles and dedicated profiles
+
+Profiles represent reusable roles, permissions, and model routing rather than repositories:
+
+- `orchestrator` — Kanban-only decomposition, routing, WIP, and human decisions;
+- `implementer` — TDD-first writes in isolated worktrees;
+- `reviewer` — independent read-only review using a different model/vendor family;
+- optional `qa-ui` — native/browser verification for UI-only acceptance;
+- optional `release-operator` — project-policy-controlled release or GitOps work.
+
+Use task-level model overrides for strength tiers when behavior and permissions are unchanged. Create a separate profile when tools, credentials, memory, safety policy, or write permissions differ. The gateway dispatcher handles mechanical lifecycle work; the orchestrator profile handles reasoning about what should run next.
 
 ## Quick reference
 
@@ -65,6 +79,8 @@ Monitor events:
 terminal(command="hermes kanban --board <board> watch --kinds completed,blocked,gave_up,crashed,timed_out")
 ```
 
+Command examples use POSIX shell syntax. On Windows, translate them to PowerShell or use the platform-specific commands declared by the project policy.
+
 ## Procedure
 
 ### 1. Discover and disposition the checkout
@@ -80,11 +96,20 @@ terminal(command="hermes kanban --board <board> watch --kinds completed,blocked,
 
 Completion criterion: the shared checkout is explainably clean, preserved work is recoverable, and the selected base commit is verified.
 
-### 2. Import the live Forgejo backlog
+### 2. Import the live Forgejo or GitHub backlog
 
-Fetch the live open issues with `tea` or the Forgejo API. Do not rely only on stale local mapping documents.
+Fetch the live open issues with the project's declared adapter:
 
-Import actionable sub-issues, not tracking epics. Preserve issue number, URL, title, body, labels, comments, and `Depends on:`. Keep `parked` issues blocked for human steering.
+- Forgejo: loop `tea issues list --repo owner/repository --state open --kind issues --page N --limit 100 --output json` until an empty page;
+- GitHub: use `gh api --paginate -X GET repos/owner/repository/issues -f state=open -f per_page=100`, filter pull requests, and normalize the returned issue fields.
+
+Do not rely only on stale local mapping documents.
+
+For either adapter, fetch comments for each retained issue with the tracker’s per-issue command/API, then compare the Kanban import count against the complete paginated source set, not one page.
+
+For GitHub, the project policy must set `tracker.dependency_source` to `body_marker`, `native`, or `sub_issues`. For Forgejo, use the declared body/label/native dependency convention. Do not infer equivalence between tracker features.
+
+Import actionable sub-issues, not tracking epics. Preserve issue number, URL, title, body, labels, comments, and dependency metadata. Keep parked issues blocked for human steering.
 
 Create parents before children and pass real parent IDs during child creation. Use an idempotency key per source issue. Validate the imported count programmatically before proceeding.
 
@@ -142,10 +167,10 @@ Completion criterion: the worktree contains only scoped changes, tests exercise 
 Use headless checks whenever they prove the behavior:
 
 ```text
-terminal(command="source \"$HOME/.cargo/env\" && cargo test -p <crate>")
-terminal(command="pnpm --filter app test -- <focused-tests>")
-terminal(command="pnpm --filter app build")
-terminal(command="pnpm --filter app lint")
+terminal(command="<project Rust test command>")
+terminal(command="<project frontend test command>")
+terminal(command="<project frontend build command>")
+terminal(command="<project frontend lint command>")
 ```
 
 Use in-process HTTP tests or a temporary headless server for server behavior. Use jsdom/component tests or headless browser tests for browser behavior.
@@ -160,12 +185,13 @@ Completion criterion: headless evidence exists before any GUI attempt; GUI evide
 
 Assign review to a different profile/model family. The reviewer reads the original acceptance criteria, diff, tests, error paths, security boundaries, and deployment constraints. It reruns relevant checks where possible and reports file/line evidence.
 
-Use these verdicts:
+Use these canonical outcomes:
 
-- approved: reviewer evidence is sufficient;
-- changes requested: create/reopen focused implementation work;
-- blocked: genuine human/external decision only;
-- preliminary: same-family or incomplete evidence, never final sign-off.
+- `APPROVE`: independent evidence is sufficient;
+- `CHANGES_REQUESTED`: create/reopen focused implementation work;
+- `BLOCKED`: genuine human/external decision only;
+- `PRELIMINARY`: same-family or incomplete evidence, never final sign-off;
+- `REVIEW-INCOMPLETE`: the reviewer did not reach or finish the target; never approval.
 
 Completion criterion: no code card is accepted as final solely from its implementer’s report.
 
@@ -173,15 +199,17 @@ Completion criterion: no code card is accepted as final solely from its implemen
 
 Resolve deployment mode from project instructions or policy config.
 
-For `gitops_only`/`argocd` projects:
+For a `gitops_only`/`argocd` project, for example:
 
-1. change desired state in the GitOps repository;
+1. change desired state in the declared GitOps repository;
 2. render and validate before state changes;
 3. commit/push the desired state;
-4. sync through Argo CD;
-5. verify Argo revision/health and the real data plane.
+4. sync through the declared controller;
+5. verify controller revision/health and the real data plane.
 
-Do not run direct `kubectl apply`, Helm mutation, or ad-hoc production rollout. For a project with another explicit rollout contract, follow that contract instead. If no contract exists, stop before production mutation.
+For a `release_only` project, build and sign the artifact, publish it through the declared release system, and verify artifact discovery/application there; do not treat artifact creation as rollout success.
+
+Do not run direct `kubectl apply`, Helm mutation, or ad-hoc production rollout when the project policy forbids it. For a project with another explicit rollout contract, follow that contract instead. If no contract exists, stop before production mutation.
 
 Completion criterion: rollout evidence matches the declared project policy, not a generic assumption.
 
@@ -204,6 +232,14 @@ For recurring human updates, create a continuity-enabled cron digest and deliver
 
 Every report distinguishes board state, worker handoff, independently verified tests/diff, and deployment evidence.
 
+## Reviewer reliability and failure handling
+
+A reviewer is only valid when it reached the intended target. Before reviewing, verify the absolute repository/worktree path, Git commit/branch, named files, read-only intent, bounded turns/runtime, and minimal reviewer toolset. Put the target path in the prompt; do not assume the controller's outer `cwd` propagates.
+
+Use `CI=1` and `TERM=dumb` for non-interactive Hermes CLI review sessions when supported. These are POSIX shell prefixes; on PowerShell set `$env:CI = "1"` and `$env:TERM = "dumb"` before launching the reviewer. A target-not-found error, wrong-cwd, terminal-clear failure, timeout, iteration exhaustion, missing credential, or process crash is `REVIEW-INCOMPLETE`, never approval.
+
+On incomplete review: inspect logs/processes, verify no source files changed, retry once with a smaller explicit scope or clean profile, then block with the exact limitation. Do not repeat the same failed launch indefinitely. The final handoff names the target commit, files inspected, checks run, findings, verdict, and limitations. See https://github.com/ksamaschke/hermes-skills/blob/main/docs/reviewer-reliability.md.
+
 ## Policy adaptation
 
 Do not copy project-specific assumptions into this skill. Put them in a project policy file or repository instructions:
@@ -216,7 +252,7 @@ Do not copy project-specific assumptions into this skill. Put them in a project 
 - notification destination;
 - protected paths and secrets policy.
 
-See `examples/project-policy.yaml` and `docs/policy-resolution.md` in the public collection repository.
+See https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/examples/project-policy.yaml and https://github.com/ksamaschke/hermes-skills/blob/main/docs/policy-resolution.md in the public collection repository.
 
 ## Pitfalls
 

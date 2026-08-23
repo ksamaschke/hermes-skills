@@ -2,13 +2,13 @@
 
 Reusable workflow skills for [Hermes Agent](https://hermes-agent.nousresearch.com/), focused on durable multi-agent engineering, review, and operations.
 
-This repository is intentionally **policy-aware rather than policy-hardcoded**. The skills define safe defaults and require each project to declare its tracker, test gate, deployment policy, profiles, and operational constraints.
+This repository is intentionally **policy-aware rather than policy-hardcoded**. The skills define safe defaults and require each project to declare its tracker (Forgejo or GitHub), test gate, deployment policy, profiles, and operational constraints.
 
 ## Included skills
 
 ### `kanban-implementation-workflow`
 
-A Forgejo + Hermes Kanban workflow for:
+A Forgejo/GitHub + Hermes Kanban workflow for:
 
 - importing actionable issues while excluding tracking epics;
 - turning `Depends on:` into real task dependencies;
@@ -19,18 +19,29 @@ A Forgejo + Hermes Kanban workflow for:
 - project-defined GitOps and rollout controls;
 - durable monitoring, notifications, and progress digests.
 
-The skill does **not** assume Minna, Argo CD, a specific model vendor, a particular branch name, or a particular Hermes profile roster.
+The core skill does not select a deployment controller. Each project declares its own rollout policy; the repository includes an illustrative GitOps/Argo policy example, but Argo is not a requirement of the workflow.
 
-## Install the skill
+## Tracker adapters
 
-Install directly from GitHub:
+The workflow supports both self-hosted Forgejo and GitHub. The project policy selects the adapter and source-of-truth conventions:
+
+- Forgejo: use `tea` or the Forgejo REST API;
+- GitHub: use `gh` or the GitHub REST/GraphQL API;
+- preserve each tracker’s native issue URLs, labels, comments, and dependency conventions;
+- do not assume that a GitHub milestone, Forgejo epic label, or project-board field has the same meaning on another tracker.
+
+The Kanban card format is tracker-neutral: retain the source tracker, issue number, URL, labels, body, and parent dependencies in imported metadata.
+
+## Install
+
+Install the Skill directly from GitHub:
 
 ```bash
 hermes skills install \
   https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/kanban-implementation-workflow/SKILL.md
 ```
 
-Or load it explicitly for a session:
+Once installed, load it explicitly for a session:
 
 ```bash
 hermes --skills kanban-implementation-workflow
@@ -52,17 +63,27 @@ Use [`examples/project-policy.yaml`](examples/project-policy.yaml) as a starting
 
 ## Role model
 
-Profiles represent **roles and permissions**, not repositories:
+Profiles represent **roles, permissions, and model routing**, not repositories:
 
 ```text
 orchestrator  →  implementer  →  reviewer  →  integrator/release
-                    │               │
-                    └── worktree    └── read-only review
+     │              │               │              │
+  kanban only   write worktree   read-only      project policy
 ```
 
-The Hermes gateway dispatcher handles mechanical Kanban lifecycle work: promotion, claims, worktrees, heartbeats, retries, and recovery. An orchestrator profile or controller handles decomposition, model routing, WIP policy, and human decisions.
+Recommended reusable profile roles:
 
-Use task-level model overrides for strength tiers where possible. Create another profile only when behavior, tools, credentials, or memory isolation differ.
+- `orchestrator` — decomposes, routes, comments, and manages WIP; no code writes;
+- `implementer` — TDD-first code changes in isolated worktrees;
+- `reviewer` — independent read-only review using a different model/vendor family;
+- `qa-ui` — optional native/browser verification lane for UI-only acceptance;
+- `release-operator` — optional project-policy-controlled release/GitOps lane.
+
+In `project-policy.yaml`, role keys use snake_case (`qa_ui`, `release_operator`) while profile names may use hyphens. The mapping is intentional: policy keys are stable schema names; profile values are user-selected identities.
+
+The Hermes gateway dispatcher handles mechanical Kanban lifecycle work: promotion, claims, worktrees, heartbeats, retries, and recovery. An orchestrator profile handles reasoning about decomposition, model strength, WIP, and human decisions.
+
+Use task-level model overrides for strength tiers where possible. Create another profile when behavior, tools, credentials, or memory isolation differ, not merely because a task needs a stronger model.
 
 ## Testing principle
 
@@ -74,13 +95,13 @@ Headless-first is a default, not a project-specific mandate:
 
 ## Deployment principle
 
-The skill never assumes Argo CD. A project policy declares its deployment mode:
+Deployment is always project policy, never a hidden default. A project policy declares its rollout mode and controller:
 
-- `gitops_only` / `argocd` for repositories where desired state must flow through Git and Argo;
-- another explicitly documented mode when a project has a different release contract;
-- `unspecified` means no production mutation is allowed until the policy is clarified.
+- `gitops_only` with Argo CD, Flux, or another named controller;
+- a release pipeline or explicitly approved direct mode;
+- `unspecified`, which means no production mutation is allowed until clarified.
 
-The example policy demonstrates Argo CD without baking Karsten's infrastructure paths, rooms, tokens, or repository names into the reusable skill.
+The example policy demonstrates one GitOps/Argo arrangement without baking any user's infrastructure paths, rooms, tokens, or repository names into the reusable skill.
 
 ## Monitoring
 
@@ -100,8 +121,11 @@ For recurring updates, use a continuity-enabled cron digest and deliver it to a 
 
 ```text
 skills/kanban-implementation-workflow/SKILL.md  reusable agent procedure
-examples/project-policy.yaml                    adaptable policy template
-docs/policy-resolution.md                       project-specific adaptation guide
+examples/project-policy.yaml                    adaptable Forgejo/GitHub policy template
+docs/profile-roles.md                            reusable profile role model
+docs/policy-resolution.md                        project-specific adaptation guide
+docs/reviewer-reliability.md                     bounded review and failure recovery
+docs/tracker-adapters.md                         Forgejo/GitHub import guidance
 tests/test_skill_frontmatter.py                 lightweight package validation
 ```
 

@@ -3,8 +3,10 @@
 version: 1
 
 tracker:
-  kind: forgejo
+  kind: forgejo # or github
   repository: owner/repository
+  cli: tea # or gh
+  dependency_source: body_marker # body_marker is portable; native/sub_issues require tracker support
   issue_labels:
     parked: parked
     epic: epic
@@ -14,8 +16,12 @@ profiles:
   orchestrator: default
   implementer: implementer
   reviewer: reviewer
-  reviewer_model_default: homelab/claude-opus-5
-  reviewer_model_routine: homelab/claude-sonnet-5
+  reviewer_model_default: null # e.g. provider/strong-model-id
+  reviewer_model_routine: null # e.g. provider/routine-model-id
+  implementer_vendor_family: null # null = unknown; review remains PRELIMINARY
+  reviewer_vendor_family: null # null = unknown; review remains PRELIMINARY
+  qa_ui: null # policy role key -> profile name
+  release_operator: null # policy role key -> profile name
 
 kanban:
   auto_decompose: true
@@ -26,12 +32,12 @@ kanban:
 
 verification:
   headless:
-    - source "$HOME/.cargo/env" && cargo test
+    - cargo test
     - pnpm --filter app test
     - pnpm --filter app build
     - pnpm --filter app lint
   ui_smoke: null
-  required_for_ui_changes: true
+  required_for_ui_changes: false # set true only when ui_smoke is configured
   process_cleanup_required: true
 
 review:
@@ -39,10 +45,14 @@ review:
   independent_vendor_family: true
   implementer_self_review_is_final: false
 
-# Deployment is deliberately project-defined. `gitops_only` + `argocd` is an
-# example, not a universal assumption.
+safety:
+  protected_paths: []
+  secrets_policy: key_env # key_env | vault | none-required
+  forbidden_mutations: []
+
 deployment:
-  mode: unspecified # gitops_only | direct_allowed | release-only | unspecified
+  mode: unspecified # gitops_only | direct_allowed | release_only | unspecified
+  # direct_cluster_mutation is a hard override; forbidden wins over any mode.
   controller: null  # argocd | flux | platform-release | null
   gitops_repository: null
   direct_cluster_mutation: forbidden
