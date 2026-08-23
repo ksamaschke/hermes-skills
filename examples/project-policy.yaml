@@ -1,0 +1,52 @@
+# Project policy template for kanban-implementation-workflow.
+# Copy this into a repository policy file and replace every placeholder.
+version: 1
+
+tracker:
+  kind: forgejo
+  repository: owner/repository
+  issue_labels:
+    parked: parked
+    epic: epic
+  base_branch: dev
+
+profiles:
+  orchestrator: default
+  implementer: implementer
+  reviewer: reviewer
+  reviewer_model_default: homelab/claude-opus-5
+  reviewer_model_routine: homelab/claude-sonnet-5
+
+kanban:
+  auto_decompose: true
+  auto_decompose_per_tick: 3
+  max_in_progress: 8
+  max_in_progress_per_profile: 5
+  review_dispatch: false
+
+verification:
+  headless:
+    - source "$HOME/.cargo/env" && cargo test
+    - pnpm --filter app test
+    - pnpm --filter app build
+    - pnpm --filter app lint
+  ui_smoke: null
+  required_for_ui_changes: true
+  process_cleanup_required: true
+
+review:
+  required: true
+  independent_vendor_family: true
+  implementer_self_review_is_final: false
+
+# Deployment is deliberately project-defined. `gitops_only` + `argocd` is an
+# example, not a universal assumption.
+deployment:
+  mode: unspecified # gitops_only | direct_allowed | release-only | unspecified
+  controller: null  # argocd | flux | platform-release | null
+  gitops_repository: null
+  direct_cluster_mutation: forbidden
+
+notifications:
+  progress_digest_schedule: every 30m
+  gateway_home_channel: null

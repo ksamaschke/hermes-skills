@@ -1,0 +1,229 @@
+---
+name: kanban-implementation-workflow
+description: "Use for Forgejo Kanban work with TDD and review."
+version: 1.0.0
+author: Karsten Samaschke (ksamaschke), Hermes Agent
+license: MIT
+platforms: [linux, macos, windows]
+metadata:
+  hermes:
+    tags: [forgejo, kanban, orchestration, tdd, review, testing, gitops]
+    related_skills: []
+---
+
+# Forgejo + Hermes Kanban Implementation Workflow
+
+Use this skill when a Forgejo backlog should be implemented through Hermes Kanban workers while an orchestrator owns decomposition, verification, review, and delivery. The workflow is intentionally policy-driven: it does not assume a repository, branch, model vendor, deployment controller, or profile roster.
+
+## When to use
+
+Use when:
+
+- work spans multiple implementation/review steps;
+- dependencies and durable handoffs matter;
+- tasks should survive agent restarts;
+- a human may need to intervene;
+- test evidence and review history must remain auditable.
+
+Do not use it to bypass project rules, deploy without an approved rollout policy, or replace a small direct edit with unnecessary orchestration.
+
+## Prerequisites
+
+Resolve these before creating ready work:
+
+- tracker and repository identity;
+- base/integration branch;
+- project-local instructions (`AGENTS.md`, `CLAUDE.md`, or equivalent);
+- headless test/build commands;
+- UI-smoke command, if applicable;
+- deployment mode and rollout owner;
+- implementer and independent reviewer profiles;
+- WIP and concurrency limits.
+
+If deployment policy is absent, do not mutate production state. Use `examples/project-policy.yaml` as a template, not as a universal policy.
+
+## Quick reference
+
+Inspect the repository:
+
+```text
+terminal(command="git status --short --branch && git branch -vv --all")
+terminal(command="git diff --stat && git diff --cached --stat")
+```
+
+Inspect the board:
+
+```text
+terminal(command="hermes kanban --board <board> stats --json")
+terminal(command="hermes kanban --board <board> diagnostics")
+terminal(command="hermes kanban --board <board> list --status running --json")
+```
+
+Monitor events:
+
+```text
+terminal(command="hermes kanban --board <board> watch --kinds completed,blocked,gave_up,crashed,timed_out")
+```
+
+## Procedure
+
+### 1. Discover and disposition the checkout
+
+1. Read project rules, build files, and tracker configuration with `read_file`/`search_files`.
+2. Inspect branch, staged/unstaged diff, worktrees, and stash list with `terminal`.
+3. Classify dirty changes as current work, partial useful work, superseded work, intentional docs, or noise.
+4. Run targeted tests on meaningful dirty work before discarding it.
+5. Preserve partial/superseded work in a named stash.
+6. Return the shared checkout to the latest valid integration ref and verify local/remote ref parity.
+7. Keep intentional planning documents; do not silently stash user context.
+8. Keep Kanban worktree containers out of project Git policy through local excludes unless the repository explicitly wants them tracked.
+
+Completion criterion: the shared checkout is explainably clean, preserved work is recoverable, and the selected base commit is verified.
+
+### 2. Import the live Forgejo backlog
+
+Fetch the live open issues with `tea` or the Forgejo API. Do not rely only on stale local mapping documents.
+
+Import actionable sub-issues, not tracking epics. Preserve issue number, URL, title, body, labels, comments, and `Depends on:`. Keep `parked` issues blocked for human steering.
+
+Create parents before children and pass real parent IDs during child creation. Use an idempotency key per source issue. Validate the imported count programmatically before proceeding.
+
+Completion criterion: every requested non-epic issue is represented exactly once and every declared dependency is encoded as a board link.
+
+### 3. Decompose into many small cards
+
+Prefer many small, independently verifiable cards. Limit **execution**, not useful decomposition.
+
+Use project-appropriate limits such as:
+
+```yaml
+kanban:
+  auto_decompose: true
+  auto_decompose_per_tick: 3
+  max_in_progress: 8
+  max_in_progress_per_profile: 5
+```
+
+These are examples. Tune them to the host, model/API quota, and file-conflict risk.
+
+Good cards include one of:
+
+- reproduce/isolate a defect;
+- write one failing regression test;
+- implement one route or transport group;
+- implement one UI behavior;
+- verify one lifecycle;
+- perform one independent review;
+- validate one release artifact.
+
+Never allow a generated review card to land on the implementer profile. Use real dependency links rather than prose-only “wait for X”.
+
+Completion criterion: cards are small enough to verify, dependencies are real, and active-worker limits are explicit.
+
+### 4. Implement TDD-first in a worktree
+
+Each code-changing worker:
+
+1. reads its board card, parent handoffs, and project rules;
+2. writes a failing test or executable regression check;
+3. runs it and records the real failure;
+4. makes the smallest production change;
+5. reruns focused and regression tests;
+6. runs project lint/type-check/build gates;
+7. checks diff scope and `git diff --check`;
+8. requests independent review instead of self-approving.
+
+Do not weaken, skip, delete, or loosen tests to make a gate green.
+
+Completion criterion: the worktree contains only scoped changes, tests exercise the acceptance behavior, and the handoff names exact commands/results.
+
+### 5. Test headless first
+
+Use headless checks whenever they prove the behavior:
+
+```text
+terminal(command="source \"$HOME/.cargo/env\" && cargo test -p <crate>")
+terminal(command="pnpm --filter app test -- <focused-tests>")
+terminal(command="pnpm --filter app build")
+terminal(command="pnpm --filter app lint")
+```
+
+Use in-process HTTP tests or a temporary headless server for server behavior. Use jsdom/component tests or headless browser tests for browser behavior.
+
+Launch the full desktop/WebView shell only when acceptance requires native windows, WebView navigation, sidecars, dialogs, trays, visual editor behavior, signed updater installation, or other native evidence. Do not open Terminal with `osascript` or start a long-lived Vite/Tauri process for routine tests.
+
+When a full smoke test is required, make it a separate time-boxed card, capture actual screenshots/logs, track every process started, and clean all app/Vite/helper processes before handoff. If display/accessibility support is unavailable, block with the exact limitation rather than retrying blindly.
+
+Completion criterion: headless evidence exists before any GUI attempt; GUI evidence is limited to genuinely native acceptance criteria.
+
+### 6. Review independently
+
+Assign review to a different profile/model family. The reviewer reads the original acceptance criteria, diff, tests, error paths, security boundaries, and deployment constraints. It reruns relevant checks where possible and reports file/line evidence.
+
+Use these verdicts:
+
+- approved: reviewer evidence is sufficient;
+- changes requested: create/reopen focused implementation work;
+- blocked: genuine human/external decision only;
+- preliminary: same-family or incomplete evidence, never final sign-off.
+
+Completion criterion: no code card is accepted as final solely from its implementer’s report.
+
+### 7. Apply the project deployment policy
+
+Resolve deployment mode from project instructions or policy config.
+
+For `gitops_only`/`argocd` projects:
+
+1. change desired state in the GitOps repository;
+2. render and validate before state changes;
+3. commit/push the desired state;
+4. sync through Argo CD;
+5. verify Argo revision/health and the real data plane.
+
+Do not run direct `kubectl apply`, Helm mutation, or ad-hoc production rollout. For a project with another explicit rollout contract, follow that contract instead. If no contract exists, stop before production mutation.
+
+Completion criterion: rollout evidence matches the declared project policy, not a generic assumption.
+
+### 8. Monitor and report
+
+The gateway dispatcher mechanically promotes, claims, spawns, heartbeats, reclaims, retries, and caps work. The orchestrator/HEX handles adaptive routing, WIP, reviewer assignment, and human decisions.
+
+Use `terminal` to inspect:
+
+```text
+hermes kanban --board <board> stats
+hermes kanban --board <board> list --status running
+hermes kanban --board <board> diagnostics
+hermes kanban --board <board> show <id>
+hermes kanban --board <board> runs <id>
+hermes kanban --board <board> log <id>
+```
+
+For recurring human updates, create a continuity-enabled cron digest and deliver it to a configured gateway home channel. A local CLI/Desktop chat may not accept scheduled delivery.
+
+Every report distinguishes board state, worker handoff, independently verified tests/diff, and deployment evidence.
+
+## Policy adaptation
+
+Do not copy project-specific assumptions into this skill. Put them in a project policy file or repository instructions:
+
+- branch and tracker;
+- gate commands;
+- profiles and model tiers;
+- UI-smoke availability;
+- deployment mode/controller;
+- notification destination;
+- protected paths and secrets policy.
+
+See `examples/project-policy.yaml` and `docs/policy-resolution.md` in the public collection repository.
+
+## Pitfalls
+
+- Many cards are not a problem; unbounded active workers are.
+- Auto-decomposition before profiles, review, and checkout policy are ready creates noise and unsafe claims.
+- A same-profile review is preliminary, not independent.
+- A named custom provider must preserve the endpoint’s exact model ID; verify the provider route with a harmless completion before assigning it to workers.
+- Use `key_env`; never inline or print credentials. Rotate a key if a command expanded it into config or output.
+- A terminal tab can outlive its process, and a process can outlive the tab. Verify and clean both.
+- Never claim a full UI flow from unit tests or a worker summary alone.
