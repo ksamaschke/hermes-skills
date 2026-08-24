@@ -6,6 +6,12 @@ This repository is intentionally **policy-aware rather than policy-hardcoded**. 
 
 ## Included skills
 
+### `scoped-subagent-audits`
+
+A bounded audit/review procedure that requires explicit working scope,
+appropriate time budgets, checkpoints, timeout recovery, and parent-side
+verification of worker claims.
+
 ### `kanban-implementation-workflow`
 
 A Forgejo/GitHub + Hermes Kanban workflow for:
@@ -120,6 +126,7 @@ For recurring updates, use a continuity-enabled cron digest and deliver it to a 
 ## Repository layout
 
 ```text
+skills/scoped-subagent-audits/SKILL.md       bounded audit/review procedure
 skills/kanban-implementation-workflow/SKILL.md  reusable agent procedure
 examples/project-policy.yaml                    adaptable Forgejo/GitHub policy template
 docs/profile-roles.md                            reusable profile role model
