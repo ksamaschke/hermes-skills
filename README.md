@@ -125,9 +125,14 @@ Typical board commands:
 hermes kanban --board <board> stats
 hermes kanban --board <board> list --status running
 hermes kanban --board <board> diagnostics
-hermes gateway status
 hermes kanban --board <board> watch \
   --kinds completed,blocked,gave_up,crashed,timed_out
+```
+
+Check factory control-plane health separately:
+
+```bash
+hermes gateway status
 ```
 
 For recurring updates, use a continuity-enabled cron digest and deliver it to a configured gateway home channel. A local CLI/Desktop chat may not have a live cron delivery target.

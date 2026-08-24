@@ -74,13 +74,28 @@ Untracked planning files, generated artifacts, or dirty checkouts are not automa
 
 ## Reporting template
 
-Use `references/closure-matrix.md`. The final report should contain:
+Use the closure-matrix fields below. In a repository checkout, `references/closure-matrix.md` provides the same template as a reusable file; the procedure does not depend on that file being separately installed. The final report should contain:
 
 - **Inventory:** every concern, numbered.
 - **Evidence:** exact task/comment/issue/artifact for each.
 - **State:** recorded, queued, gated, blocked, fixed, verified, or closed.
 - **Gaps:** anything still only mentioned or only summarized.
 - **Decision:** whether to continue, recover a worker, block release, or accept a residual risk.
+
+## Closure matrix template
+
+Keep one row per finding or acceptance gap:
+
+- ID / concern and source;
+- severity or release impact;
+- exact evidence target;
+- durable record: task, issue, comment, artifact, or file;
+- current state: mentioned / recorded / queued / dependency-gated / blocked / fixed / verified / closed;
+- parent or dependency and owner;
+- acceptance evidence still required;
+- residual-risk decision or reference.
+
+For every timeout, also record the command or worker action, time limit, result, focused checks that passed, replacement owner/task, and closure condition.
 
 ## Pitfalls
 

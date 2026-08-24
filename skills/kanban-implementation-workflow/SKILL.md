@@ -1,6 +1,6 @@
 ---
 name: kanban-implementation-workflow
-description: "Run Forgejo/GitHub Kanban factories with verified recovery."
+description: "Forgejo/GitHub Kanban work with TDD and review."
 version: 1.1.0
 author: Karsten Samaschke (ksamaschke), Hermes Agent
 license: MIT
@@ -126,7 +126,7 @@ Use project-appropriate limits such as:
 kanban:
   auto_decompose: true
   auto_decompose_per_tick: 3
-  max_in_progress: 8
+  max_in_progress: 8 # total cap; tune for aggregate backend capacity
   max_in_progress_per_profile: 2 # conservative start; raise after a capacity probe
 ```
 
@@ -245,7 +245,7 @@ Use these classifications:
 
 Persisted configuration is not necessarily effective configuration. Gateway watchers may capture `max_in_progress`, `max_in_progress_per_profile`, and review-dispatch settings at startup. After changing them, use only the supervised lifecycle, then verify the new gateway PID, startup policy lines, board claims, worker PIDs, and heartbeats. Never start a second gateway or standalone dispatcher against the same database.
 
-A successful tiny model probe proves route reachability, not worker-sized capacity. Test the exact profile/provider/model route and observe a representative request before increasing fan-out. Treat `Overloaded` as infrastructure-incomplete, reduce the per-profile cap, and queue excess reviews rather than repeatedly retrying the same backend.
+A successful tiny model probe proves route reachability, not worker-sized capacity. Test the exact profile/provider/model route and observe a representative request before increasing fan-out. Treat `Overloaded` as `REVIEW-INCOMPLETE` until route capacity is repaired, reduce the per-profile cap, and queue excess reviews rather than repeatedly retrying the same backend.
 
 Requeue only cards whose failure is attributable to the repaired infrastructure. Record the cause and replacement route in a durable comment, use the Kanban unblock/requeue operation, read back status/assignee/retry state, and verify a new run, PID, and heartbeat. Preserve genuine product timeouts, missing UI evidence, dependency gates, and human decisions.
 

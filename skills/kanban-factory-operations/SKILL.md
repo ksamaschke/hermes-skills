@@ -1,6 +1,6 @@
 ---
 name: kanban-factory-operations
-description: "Operate and recover Kanban software factories."
+description: "Use when Kanban work stalls; recover dispatch and review."
 version: 0.1.0
 author: Karsten Samaschke, Hermes Agent
 license: MIT
@@ -162,6 +162,15 @@ Require all of the following before calling the factory recovered:
 For completed work, read the task/run back and verify the summary, tests, diff/review evidence, and final board status. A service-start response, a worker process alone, or a digest with new counts is insufficient.
 
 **Completion criterion:** live task/run/event evidence supports the exact recovery claim.
+
+## References
+
+When working from a repository checkout, use the companion references for the detailed runtime-drift symptom matrix and stall-recovery contract:
+
+- `references/dispatcher-runtime-drift.md`
+- `references/stall-recovery.md`
+
+The core procedure above remains self-contained for direct `SKILL.md` installation.
 
 ## Reporting Shape
 

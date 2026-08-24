@@ -18,7 +18,7 @@ The Kanban section should also declare whether review is dispatched automaticall
 - `review_dispatch: false` when the orchestrator explicitly creates/assigns reviewer cards;
 - `review_dispatch: true` only when every review request carries a valid independent reviewer profile.
 
-The same section should declare conservative execution limits and the dispatcher owner. Set `max_in_progress_per_profile` from observed backend capacity, not from the number of queued cards. A successful single-request model probe does not justify concurrent fan-out.
+The same section should declare conservative execution limits and the dispatcher owner (for example, `dispatcher_owner: supervised_gateway`). Set `max_in_progress_per_profile` from observed backend capacity, not from the number of queued cards. A successful single-request model probe does not justify concurrent fan-out.
 
 
 Project policy should declare:

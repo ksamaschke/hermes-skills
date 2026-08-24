@@ -12,6 +12,11 @@ EXPECTED_SKILL_FILES = {
     ROOT / "skills" / "kanban-factory-operations" / "SKILL.md",
     ROOT / "skills" / "kanban-progress-evidence" / "SKILL.md",
 }
+EXPECTED_REFERENCE_FILES = {
+    ROOT / "skills" / "kanban-factory-operations" / "references" / "dispatcher-runtime-drift.md",
+    ROOT / "skills" / "kanban-factory-operations" / "references" / "stall-recovery.md",
+    ROOT / "skills" / "kanban-progress-evidence" / "references" / "closure-matrix.md",
+}
 POLICY = ROOT / "examples" / "project-policy.yaml"
 PUBLIC_TEXT_FILES = [
     ROOT / "README.md",
@@ -26,7 +31,12 @@ PUBLIC_TEXT_FILES = [
     ROOT / ".gitignore",
     ROOT / ".github" / "workflows" / "ci.yml",
     *SKILL_PATHS,
-    *(path for skill_path in SKILL_PATHS for path in skill_path.parent.rglob("*.md")),
+    *(
+        path
+        for skill_path in SKILL_PATHS
+        for path in skill_path.parent.rglob("*.md")
+        if path not in SKILL_PATHS
+    ),
 ]
 
 
@@ -40,6 +50,8 @@ def _frontmatter(path: Path):
 
 def test_skill_frontmatter_and_layout():
     assert EXPECTED_SKILL_FILES <= set(SKILL_PATHS)
+    for required_path in EXPECTED_SKILL_FILES | EXPECTED_REFERENCE_FILES:
+        assert required_path.exists(), required_path
     names = {path.parent.name for path in SKILL_PATHS}
 
     for path in SKILL_PATHS:
@@ -52,9 +64,11 @@ def test_skill_frontmatter_and_layout():
         description = data["description"]
         assert len(description) <= 60, path
         assert description.endswith("."), path
+        assert data["author"].strip() and data["author"].strip() != "Hermes Agent", path
 
         related = data.get("metadata", {}).get("hermes", {}).get("related_skills", [])
         assert set(related) <= names, path
+        assert path.parent.name not in related, path
         assert len(text) <= 100_000, path
 
     core_text = CORE_SKILL.read_text(encoding="utf-8").lower()
@@ -79,6 +93,10 @@ def test_policy_parses_and_declares_roles_safety_and_deployment():
     assert policy["deployment"]["direct_cluster_mutation"] == "forbidden"
     assert policy["safety"]["protected_paths"] == []
     assert policy["kanban"]["max_in_progress_per_profile"] == 2
+    assert policy["kanban"]["dispatcher_owner"] == "supervised_gateway"
+    core_text = CORE_SKILL.read_text(encoding="utf-8")
+    match = re.search(r"max_in_progress_per_profile:\s*(\d+)", core_text)
+    assert match and int(match.group(1)) == policy["kanban"]["max_in_progress_per_profile"]
     if policy["verification"]["required_for_ui_changes"]:
         assert policy["verification"]["ui_smoke"]
 
