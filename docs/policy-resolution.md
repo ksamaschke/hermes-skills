@@ -18,6 +18,8 @@ The Kanban section should also declare whether review is dispatched automaticall
 - `review_dispatch: false` when the orchestrator explicitly creates/assigns reviewer cards;
 - `review_dispatch: true` only when every review request carries a valid independent reviewer profile.
 
+The same section should declare conservative execution limits and the dispatcher owner (for example, `dispatcher_owner: supervised_gateway`). Set `max_in_progress_per_profile` from observed backend capacity, not from the number of queued cards. A successful single-request model probe does not justify concurrent fan-out.
+
 
 Project policy should declare:
 
@@ -30,6 +32,10 @@ Project policy should declare:
 - deployment mode and the system that owns rollout;
 - notification channel and progress-digest schedule;
 - protected paths, secrets boundaries, and forbidden mutations.
+
+## Persisted versus effective runtime policy
+
+The project policy file and Hermes config are persisted intent. A supervised gateway may capture dispatcher and review settings at process startup. After changing `max_in_progress`, `max_in_progress_per_profile`, `review_dispatch`, or a profile/model route, the operator must use the supported supervised lifecycle and verify the effective startup values, current gateway PID, worker claims, and heartbeats. A stale supervised PID is not factory health evidence.
 
 ## Headless-first is a default
 

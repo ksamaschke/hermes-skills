@@ -26,8 +26,9 @@ profiles:
 kanban:
   auto_decompose: true
   auto_decompose_per_tick: 3
-  max_in_progress: 8
-  max_in_progress_per_profile: 5
+  max_in_progress: 8 # total cap; tune for aggregate backend capacity
+  max_in_progress_per_profile: 2 # conservative start; raise after a capacity probe
+  dispatcher_owner: supervised_gateway # supervised_gateway | standalone | external
   review_dispatch: false
 
 verification:

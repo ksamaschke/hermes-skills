@@ -5,11 +5,21 @@ import re
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
-SKILL = ROOT / "skills" / "kanban-implementation-workflow" / "SKILL.md"
+SKILL_PATHS = sorted((ROOT / "skills").glob("*/SKILL.md"))
+CORE_SKILL = ROOT / "skills" / "kanban-implementation-workflow" / "SKILL.md"
+EXPECTED_SKILL_FILES = {
+    ROOT / "skills" / "kanban-implementation-workflow" / "SKILL.md",
+    ROOT / "skills" / "kanban-factory-operations" / "SKILL.md",
+    ROOT / "skills" / "kanban-progress-evidence" / "SKILL.md",
+}
+EXPECTED_REFERENCE_FILES = {
+    ROOT / "skills" / "kanban-factory-operations" / "references" / "dispatcher-runtime-drift.md",
+    ROOT / "skills" / "kanban-factory-operations" / "references" / "stall-recovery.md",
+    ROOT / "skills" / "kanban-progress-evidence" / "references" / "closure-matrix.md",
+}
 POLICY = ROOT / "examples" / "project-policy.yaml"
 PUBLIC_TEXT_FILES = [
     ROOT / "README.md",
-    SKILL,
     POLICY,
     ROOT / "docs" / "policy-resolution.md",
     ROOT / "docs" / "profile-roles.md",
@@ -20,34 +30,50 @@ PUBLIC_TEXT_FILES = [
     ROOT / "requirements-dev.txt",
     ROOT / ".gitignore",
     ROOT / ".github" / "workflows" / "ci.yml",
+    *SKILL_PATHS,
+    *(
+        path
+        for skill_path in SKILL_PATHS
+        for path in skill_path.parent.rglob("*.md")
+        if path not in SKILL_PATHS
+    ),
 ]
 
 
-def _frontmatter():
-    text = SKILL.read_text(encoding="utf-8")
-    assert text.startswith("---\n")
+def _frontmatter(path: Path):
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith("---\n"), path
     prefix, separator, remainder = text.partition("\n---\n")
-    assert separator, "missing frontmatter terminator"
-    return text, prefix[4:], remainder
+    assert separator, f"missing frontmatter terminator: {path}"
+    return text, yaml.safe_load(prefix[4:]), remainder
 
 
 def test_skill_frontmatter_and_layout():
-    text, frontmatter, _body = _frontmatter()
-    data = yaml.safe_load(frontmatter)
-    assert data["name"] == SKILL.parent.name
-    assert re.fullmatch(r"\d+\.\d+\.\d+", str(data["version"]))
-    assert data["license"] == "MIT"
-    assert set(data["platforms"]) >= {"linux", "macos", "windows"}
-
-    description = data["description"]
-    assert len(description) <= 60
-    assert description.endswith(".")
-    assert "forgejo" in description.lower()
-    assert "github" in description.lower()
-
-    assert len(text) <= 100_000
-    for required_path in PUBLIC_TEXT_FILES:
+    assert EXPECTED_SKILL_FILES <= set(SKILL_PATHS)
+    for required_path in EXPECTED_SKILL_FILES | EXPECTED_REFERENCE_FILES:
         assert required_path.exists(), required_path
+    names = {path.parent.name for path in SKILL_PATHS}
+
+    for path in SKILL_PATHS:
+        text, data, _body = _frontmatter(path)
+        assert data["name"] == path.parent.name
+        assert re.fullmatch(r"\d+\.\d+\.\d+", str(data["version"]))
+        assert data["license"] == "MIT"
+        assert set(data["platforms"]) >= {"linux", "macos", "windows"}
+
+        description = data["description"]
+        assert len(description) <= 60, path
+        assert description.endswith("."), path
+        assert data["author"].strip() and data["author"].strip() != "Hermes Agent", path
+
+        related = data.get("metadata", {}).get("hermes", {}).get("related_skills", [])
+        assert set(related) <= names, path
+        assert path.parent.name not in related, path
+        assert len(text) <= 100_000, path
+
+    core_text = CORE_SKILL.read_text(encoding="utf-8").lower()
+    assert "forgejo" in core_text
+    assert "github" in core_text
 
 
 def test_policy_parses_and_declares_roles_safety_and_deployment():
@@ -66,6 +92,11 @@ def test_policy_parses_and_declares_roles_safety_and_deployment():
     assert policy["deployment"]["mode"] in {"gitops_only", "direct_allowed", "release_only", "unspecified"}
     assert policy["deployment"]["direct_cluster_mutation"] == "forbidden"
     assert policy["safety"]["protected_paths"] == []
+    assert policy["kanban"]["max_in_progress_per_profile"] == 2
+    assert policy["kanban"]["dispatcher_owner"] == "supervised_gateway"
+    core_text = CORE_SKILL.read_text(encoding="utf-8")
+    match = re.search(r"max_in_progress_per_profile:\s*(\d+)", core_text)
+    assert match and int(match.group(1)) == policy["kanban"]["max_in_progress_per_profile"]
     if policy["verification"]["required_for_ui_changes"]:
         assert policy["verification"]["ui_smoke"]
 
@@ -87,13 +118,10 @@ def test_public_files_have_no_machine_or_secret_identifiers():
     for value in forbidden[:4]:
         assert value not in combined, value
 
-    # The regex checks are applied to content rather than treated as literals.
     assert not re.search(forbidden[4], combined)
     assert not re.search(forbidden[5], combined)
 
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    skill = SKILL.read_text(encoding="utf-8").lower()
-    assert "forgejo" in skill and "github" in skill
+    skill = CORE_SKILL.read_text(encoding="utf-8").lower()
     assert "tea issues list" in skill
     assert "gh api" in skill
     assert "--paginate" in skill and "--page" in skill

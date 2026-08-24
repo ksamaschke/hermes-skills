@@ -25,6 +25,14 @@ A Forgejo/GitHub + Hermes Kanban workflow for:
 - project-defined GitOps and rollout controls;
 - durable monitoring, notifications, and progress digests.
 
+### `kanban-factory-operations`
+
+Live operation and recovery for stalled factories: dispatcher ownership, gateway/runtime drift, reviewer capacity, narrow requeueing, and ACTIVE/IDLE-BY-GATING/STALLED health classification.
+
+### `kanban-progress-evidence`
+
+Evidence and closure accounting for digests and reviews: complete inventories, durable records, dependency gates, timeout attribution, independent verification, and explicit queued/blocked/fixed/verified/closed language.
+
 The core skill does not select a deployment controller. Each project declares its own rollout policy; the repository includes an illustrative GitOps/Argo policy example, but Argo is not a requirement of the workflow.
 
 ## Tracker adapters
@@ -45,12 +53,18 @@ Install the Skill directly from GitHub:
 ```bash
 hermes skills install \
   https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/kanban-implementation-workflow/SKILL.md
+
+hermes skills install \
+  https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/kanban-factory-operations/SKILL.md
+
+hermes skills install \
+  https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/kanban-progress-evidence/SKILL.md
 ```
 
-Once installed, load it explicitly for a session:
+Once installed, load the set explicitly for a session:
 
 ```bash
-hermes --skills kanban-implementation-workflow
+hermes --skills kanban-implementation-workflow,kanban-factory-operations,kanban-progress-evidence
 ```
 
 Existing profiles need to load or install the skill explicitly. Newly cloned profiles inherit the skill set available at clone time.
@@ -121,6 +135,12 @@ hermes kanban --board <board> watch \
   --kinds completed,blocked,gave_up,crashed,timed_out
 ```
 
+Check factory control-plane health separately:
+
+```bash
+hermes gateway status
+```
+
 For recurring updates, use a continuity-enabled cron digest and deliver it to a configured gateway home channel. A local CLI/Desktop chat may not have a live cron delivery target.
 
 ## Repository layout
@@ -128,6 +148,10 @@ For recurring updates, use a continuity-enabled cron digest and deliver it to a 
 ```text
 skills/scoped-subagent-audits/SKILL.md       bounded audit/review procedure
 skills/kanban-implementation-workflow/SKILL.md  reusable agent procedure
+skills/kanban-factory-operations/SKILL.md       live factory operation and recovery
+skills/kanban-factory-operations/references/    runtime drift and stall recovery
+skills/kanban-progress-evidence/SKILL.md        evidence and closure accounting
+skills/kanban-progress-evidence/references/     closure matrix template
 examples/project-policy.yaml                    adaptable Forgejo/GitHub policy template
 docs/profile-roles.md                            reusable profile role model
 docs/policy-resolution.md                        project-specific adaptation guide
