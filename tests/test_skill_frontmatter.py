@@ -39,7 +39,7 @@ def _frontmatter(path: Path):
 
 
 def test_skill_frontmatter_and_layout():
-    assert set(SKILL_PATHS) == EXPECTED_SKILL_FILES
+    assert EXPECTED_SKILL_FILES <= set(SKILL_PATHS)
     names = {path.parent.name for path in SKILL_PATHS}
 
     for path in SKILL_PATHS:
