@@ -1,14 +1,14 @@
 ---
 name: kanban-implementation-workflow
-description: "Forgejo/GitHub Kanban work with TDD and review."
-version: 1.0.0
+description: "Run Forgejo/GitHub Kanban factories with verified recovery."
+version: 1.1.0
 author: Karsten Samaschke (ksamaschke), Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [forgejo, github, kanban, orchestration, tdd, review, testing, gitops]
-    related_skills: []
+    related_skills: [kanban-factory-operations, kanban-progress-evidence]
 ---
 
 # Forgejo/GitHub + Hermes Kanban Implementation Workflow
@@ -39,6 +39,7 @@ Resolve these before creating ready work:
 - deployment mode and rollout owner;
 - implementer and independent reviewer profiles;
 - WIP and concurrency limits.
+- dispatcher owner, effective runtime policy, and the supported reload path.
 
 If deployment policy is absent, do not mutate production state. Use the public policy template at https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/examples/project-policy.yaml as a starting point, not as a universal policy.
 
@@ -126,7 +127,7 @@ kanban:
   auto_decompose: true
   auto_decompose_per_tick: 3
   max_in_progress: 8
-  max_in_progress_per_profile: 5
+  max_in_progress_per_profile: 2 # conservative start; raise after a capacity probe
 ```
 
 These are examples. Tune them to the host, model/API quota, and file-conflict risk.
@@ -232,11 +233,29 @@ For recurring human updates, create a continuity-enabled cron digest and deliver
 
 Every report distinguishes board state, worker handoff, independently verified tests/diff, and deployment evidence.
 
+## Factory health and recovery
+
+When a digest reports no progress, classify the live factory instead of treating the digest as the source of truth. Collect current board JSON, `hermes gateway status`, effective `kanban` configuration, and the latest dispatcher evidence from the supervised gateway. A supervised PID is not proof that the dispatcher is ticking.
+
+Use these classifications:
+
+- `ACTIVE` — workers are running and dispatcher ticks are recent;
+- `IDLE-BY-GATING` — no runnable work exists because named dependencies or human decisions hold it;
+- `STALLED` — actionable todo/review work exists but dispatcher liveness, runtime policy, profile routing, or backend capacity prevents execution.
+
+Persisted configuration is not necessarily effective configuration. Gateway watchers may capture `max_in_progress`, `max_in_progress_per_profile`, and review-dispatch settings at startup. After changing them, use only the supervised lifecycle, then verify the new gateway PID, startup policy lines, board claims, worker PIDs, and heartbeats. Never start a second gateway or standalone dispatcher against the same database.
+
+A successful tiny model probe proves route reachability, not worker-sized capacity. Test the exact profile/provider/model route and observe a representative request before increasing fan-out. Treat `Overloaded` as infrastructure-incomplete, reduce the per-profile cap, and queue excess reviews rather than repeatedly retrying the same backend.
+
+Requeue only cards whose failure is attributable to the repaired infrastructure. Record the cause and replacement route in a durable comment, use the Kanban unblock/requeue operation, read back status/assignee/retry state, and verify a new run, PID, and heartbeat. Preserve genuine product timeouts, missing UI evidence, dependency gates, and human decisions.
+
 ## Reviewer reliability and failure handling
 
 A reviewer is only valid when it reached the intended target. Before reviewing, verify the absolute repository/worktree path, Git commit/branch, named files, read-only intent, bounded turns/runtime, and minimal reviewer toolset. Put the target path in the prompt; do not assume the controller's outer `cwd` propagates.
 
 Use `CI=1` and `TERM=dumb` for non-interactive Hermes CLI review sessions when supported. These are POSIX shell prefixes; on PowerShell set `$env:CI = "1"` and `$env:TERM = "dumb"` before launching the reviewer. A target-not-found error, wrong-cwd, terminal-clear failure, timeout, iteration exhaustion, missing credential, or process crash is `REVIEW-INCOMPLETE`, never approval.
+
+Also record the exact provider/model route and effective reviewer concurrency cap. A catalog entry or one successful completion is not evidence that concurrent review workers can run safely.
 
 On incomplete review: inspect logs/processes, verify no source files changed, retry once with a smaller explicit scope or clean profile, then block with the exact limitation. Do not repeat the same failed launch indefinitely. The final handoff names the target commit, files inspected, checks run, findings, verdict, and limitations. See https://github.com/ksamaschke/hermes-skills/blob/main/docs/reviewer-reliability.md.
 
@@ -260,6 +279,9 @@ See https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/examples/pro
 - Auto-decomposition before profiles, review, and checkout policy are ready creates noise and unsafe claims.
 - A same-profile review is preliminary, not independent.
 - A named custom provider must preserve the endpoint’s exact model ID; verify the provider route with a harmless completion before assigning it to workers.
+- A tiny model probe can pass while a worker-sized or concurrent request returns `Overloaded`; verify observed capacity before fan-out.
+- A persisted WIP/config edit can differ from the policy loaded by the running gateway; reload through the supervised owner and read the effective setting back.
+- A stale supervised PID or a digest with unchanged counts does not distinguish healthy gating from a stalled dispatcher.
 - Use `key_env`; never inline or print credentials. Rotate a key if a command expanded it into config or output.
 - A terminal tab can outlive its process, and a process can outlive the tab. Verify and clean both.
 - Never claim a full UI flow from unit tests or a worker summary alone.
