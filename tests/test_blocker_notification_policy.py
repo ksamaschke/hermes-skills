@@ -26,3 +26,5 @@ def test_runtime_contract_documents_explicit_profiles_and_fallbacks():
     assert "The decomposer is not a separate Hermes profile" in text
     assert "implementation-skills.yaml" in text
     assert "auto_subscribe_on_create: false" in text
+    assert "provider: openai-codex" in text
+    assert "model: gpt-5.6-luna" in text

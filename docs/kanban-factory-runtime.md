@@ -94,13 +94,19 @@ orchestrator profile's prompt or skills. It produces a task graph; the
 `orchestrator_profile` only controls ownership of the resulting root task.
 The dispatcher then spawns explicit profile workers for the child tasks.
 
-The current local setting is `provider: auto` with no model override. That can
-resolve through the current main route (`openai-codex` / `gpt-5.6-luna` in this
-environment), but it is not a reproducible model contract. Before pinning it,
-run a bounded probe and choose the intended quality/cost tier. Pinning to Luna
-is a reasonable consistency choice if decomposition quality matters more than
-minimum cost; it is not safe to call it the cheapest option without a current
-provider price/quota decision.
+The current Minna setting is explicitly pinned:
+
+```yaml
+auxiliary:
+  kanban_decomposer:
+    provider: openai-codex
+    model: gpt-5.6-luna
+```
+
+This reuses the verified main/implementer route and makes decomposition
+reproducible for this factory. It remains a Minna-specific choice: another
+factory may select a different provider/model after its own bounded quality,
+latency, and cost probe. The reusable skills do not impose this model.
 
 ## Explicit profiles versus implicit subagents
 
