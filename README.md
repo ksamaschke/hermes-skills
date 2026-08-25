@@ -50,6 +50,10 @@ Central Kanban reporting, the versioned runtime configuration contract, and
 the dispatcher/digest boundary are documented in
 [`docs/central-kanban-reporting.md`](docs/central-kanban-reporting.md).
 
+The broader runtime, profile-routing, decomposer, and explicit-profile
+contract is documented in
+[`docs/kanban-factory-runtime.md`](docs/kanban-factory-runtime.md).
+
 ## Tracker adapters
 
 The workflow supports both self-hosted Forgejo and GitHub. The project policy selects the adapter and source-of-truth conventions:

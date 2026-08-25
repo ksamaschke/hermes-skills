@@ -18,3 +18,11 @@ def test_recovery_requires_current_handoff_for_old_blocked_events():
     assert "individual task cards must not contact Matrix directly" in text
     assert "central HEX digest" in text
     assert "Do not create or retain per-task Matrix subscriptions" in text
+
+
+def test_runtime_contract_documents_explicit_profiles_and_fallbacks():
+    text = (ROOT / "docs" / "kanban-factory-runtime.md").read_text()
+    assert "Human-facing default profile" in text
+    assert "The decomposer is not a separate Hermes profile" in text
+    assert "implementation-skills.yaml" in text
+    assert "auto_subscribe_on_create: false" in text
