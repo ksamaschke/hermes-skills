@@ -122,6 +122,13 @@ A full factory should distinguish these outcomes:
 
 On a real failure episode, emit one actionable event containing task id/title, profile, run sequence, budget, failure threshold, last error, dependencies, workspace, and next action. Deduplicate by task plus failure episode. Deliver through existing `notify+wake` subscriptions to the main agent/human. Existing subscriptions created after an old event do not replay that event; add a current durable comment when applying recovery.
 
+Do not leave imported or legacy human/capability/operator blockers silent. Read
+`notify-list` for each such task; when the current origin is known and no
+subscription exists, create a `notify+wake` subscription, read it back, and
+send a current blocker handoff. `IDLE-BY-GATING` is valid only after the human
+has been informed or the task is explicitly documented as intentionally
+parked.
+
 ### 6. Verify the recovered factory
 
 Do not report `ACTIVE` or `RECOVERED` until all are true:

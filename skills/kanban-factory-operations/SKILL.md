@@ -113,6 +113,14 @@ Reconcile counts programmatically. Enumerate every active review, blocker, and r
 
 **Completion criterion:** the report names the exact current counts, every running/review/blocked task, and whether the gateway is supervised by the expected owner.
 
+For every blocked task that needs human input, inspect its
+`hermes kanban notify-list <task_id> --json` result. Imported or legacy tasks
+may have no origin subscription even though the board contains a blocker
+comment. When the current origin is known, create a `notify+wake`
+`notify-subscribe` entry, read it back, and deliver a current handoff because
+subscriptions do not replay old blocked events. A human blocker without a
+subscription must never be left silently in `IDLE-BY-GATING`.
+
 ### 2. Classify why work is not moving
 
 For each task, distinguish:
