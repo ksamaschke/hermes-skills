@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [kanban, evidence, verification, orchestration, audit]
-    related_skills: [kanban-implementation-workflow, kanban-factory-operations]
+    related_skills: [kanban-implementation-workflow, kanban-factory-operations, software-factory-recovery]
 ---
 
 # Kanban Progress Evidence
@@ -45,6 +45,21 @@ A worker saying “done” is not proof of fixed, verified, or closed.
 5. **Verify every write.** After creating a task, adding a comment, blocking/reassigning, or changing a status, read the exact target back. Do not claim an external write succeeded from the write response alone.
 6. **Handle timeouts conservatively.** If a create/comment command times out, inspect by idempotency key and title before retrying. It may have succeeded. If an intended blocked task races into `ready`, block or reclaim it immediately, then read it back again. Inspect repository state after any worker may have started.
 7. **Report with explicit closure language.** Say which items are recorded, queued, gated, blocked, fixed, independently verified, and closed. Do not collapse these into “handled.” State untracked items plainly and either file them or explain why they are intentionally outside Kanban.
+
+## Autonomous mechanical recovery
+
+Before escalating a task to a human, run the repository's deterministic
+recovery add-on and inspect its readback:
+
+```bash
+~/.hermes/scripts/kanban_factory_recovery.py --board <board> --dry-run
+```
+
+The real watchdog may promote legacy cron snapshots through `hermes cron edit`
+and remove only a clean managed worktree whose branch collision blocked a task.
+It must preserve dirty or active worktrees and never bypass review, product
+acceptance, or deployment policy. Hermes core remains unchanged; this is an
+add-on layer.
 
 ## Review and remediation pattern
 

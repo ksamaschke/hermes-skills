@@ -33,7 +33,18 @@ Live operation and recovery for stalled factories: dispatcher ownership, gateway
 
 Evidence and closure accounting for digests and reviews: complete inventories, durable records, dependency gates, timeout attribution, independent verification, and explicit queued/blocked/fixed/verified/closed language.
 
+### `software-factory-recovery`
+
+Adaptive recovery for autonomous factories. The skill uses the external
+`scripts/kanban_factory_recovery.py` add-on to repair legacy cron inference
+snapshots and deterministic duplicate clean worktree failures without changing
+Hermes core or discarding dirty work.
+
 The core skill does not select a deployment controller. Each project declares its own rollout policy; the repository includes an illustrative GitOps/Argo policy example, but Argo is not a requirement of the workflow.
+
+See [`docs/skill-areas.md`](docs/skill-areas.md) for the area-of-interest map,
+the software-factory skill set, supporting files, and the explicit Hermes
+synchronization allowlist.
 
 ## Tracker adapters
 
@@ -59,13 +70,27 @@ hermes skills install \
 
 hermes skills install \
   https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/kanban-progress-evidence/SKILL.md
+
+hermes skills install \
+  https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/software-factory-recovery/SKILL.md
 ```
 
 Once installed, load the set explicitly for a session:
 
 ```bash
-hermes --skills kanban-implementation-workflow,kanban-factory-operations,kanban-progress-evidence
+hermes --skills kanban-implementation-workflow,kanban-factory-operations,kanban-progress-evidence,software-factory-recovery
 ```
+
+The deterministic recovery add-on is installed separately from the skill
+documents:
+
+```bash
+install -m 755 scripts/kanban_factory_recovery.py ~/.hermes/scripts/kanban_factory_recovery.py
+```
+
+Schedule it as a silent `no_agent` cron job every few minutes. It must remain
+outside Hermes core and only repair the mechanical cases documented by the
+recovery skill.
 
 Existing profiles need to load or install the skill explicitly. Newly cloned profiles inherit the skill set available at clone time.
 
@@ -139,6 +164,7 @@ Check factory control-plane health separately:
 
 ```bash
 hermes gateway status
+~/.hermes/scripts/kanban_factory_recovery.py --board <board> --dry-run
 ```
 
 For recurring updates, use a continuity-enabled cron digest and deliver it to a configured gateway home channel. A local CLI/Desktop chat may not have a live cron delivery target.
@@ -152,6 +178,8 @@ skills/kanban-factory-operations/SKILL.md       live factory operation and recov
 skills/kanban-factory-operations/references/    runtime drift and stall recovery
 skills/kanban-progress-evidence/SKILL.md        evidence and closure accounting
 skills/kanban-progress-evidence/references/     closure matrix template
+skills/software-factory-recovery/SKILL.md      autonomous recovery procedure
+scripts/kanban_factory_recovery.py              deterministic recovery add-on
 examples/project-policy.yaml                    adaptable Forgejo/GitHub policy template
 docs/profile-roles.md                            reusable profile role model
 docs/policy-resolution.md                        project-specific adaptation guide

@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [kanban, software-factory, orchestration, dispatch, review, evidence]
-    related_skills: [kanban-implementation-workflow, kanban-progress-evidence]
+    related_skills: [kanban-implementation-workflow, kanban-progress-evidence, software-factory-recovery]
 ---
 
 # Kanban Factory Operations
@@ -37,6 +37,22 @@ Do not use a digest alone as the source of truth. Do not use this skill to bypas
 5. **Infrastructure recovery is narrow.** Requeue a card after fixing a dispatcher/backend problem only when its failure is attributable to that problem. Preserve genuine product timeouts, missing evidence, dependency gates, and human decisions.
 6. **Worker claims are untrusted.** Verify from task runs, task events, PIDs, heartbeats, diffs, tests, and the exact board state.
 7. **Capacity is part of correctness.** A backend that accepts one probe but overloads under fan-out is not a healthy factory route. Bound per-profile concurrency to observed capacity.
+
+## Add-on recovery layer
+
+Keep factory recovery outside Hermes core. The repository's
+`scripts/kanban_factory_recovery.py` is installed as a silent `no_agent` cron
+job and repairs only:
+
+- legacy LLM cron jobs whose creation-time snapshots are not durable
+  `provider`/`model` fields, using `hermes cron edit`;
+- blocked tasks whose latest spawn failure is a duplicate clean managed Git
+  worktree, preserving the branch, removing only the clean worktree, unblocking
+  the task, and reading the status back.
+
+Dirty or non-managed worktrees, product failures, provider authorization,
+review findings, and deployment decisions remain explicit blockers. Do not
+modify Hermes source for these repairs.
 
 ## Prerequisites
 

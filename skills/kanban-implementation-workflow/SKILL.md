@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [forgejo, github, kanban, orchestration, tdd, review, testing, gitops]
-    related_skills: [kanban-factory-operations, kanban-progress-evidence]
+    related_skills: [kanban-factory-operations, kanban-progress-evidence, software-factory-recovery]
 ---
 
 # Forgejo/GitHub + Hermes Kanban Implementation Workflow
@@ -216,7 +216,7 @@ Completion criterion: rollout evidence matches the declared project policy, not 
 
 ### 8. Monitor and report
 
-The gateway dispatcher mechanically promotes, claims, spawns, heartbeats, reclaims, retries, and caps work. The orchestrator/HEX handles adaptive routing, WIP, reviewer assignment, and human decisions.
+The gateway dispatcher mechanically promotes, claims, spawns, heartbeats, reclaims, retries, and caps work. The orchestrator/HEX handles adaptive routing, WIP, reviewer assignment, and human decisions. Factory-specific mechanical repairs belong in the external add-on `scripts/kanban_factory_recovery.py`, not Hermes core: pin legacy cron snapshots, repair duplicate clean managed worktrees, verify readback, and leave dirty/product/review/human blockers untouched.
 
 Use `terminal` to inspect:
 
