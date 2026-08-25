@@ -66,6 +66,20 @@ checks and return the evidence already collected. A timeout is
 `REVIEW-INCOMPLETE`, never a finding, approval, or reason to retry the same
 broad prompt. Decompose and create a narrower continuation card instead.
 
+### Hierarchical chunking
+
+Build a review manifest before dispatch. Split first by acceptance question or
+control-flow path, then split any remaining chunk that crosses two runtime
+layers, names more than five primary production files, or asks for more than
+one independent verdict. A leaf chunk has one question, a small directly
+referenced file/test set, focused checks, and a 600-second cap.
+
+When leaf chunks finish, use a bounded fan-in task to reconcile their reports
+and map them to the acceptance criteria. The fan-in task must not repeat a
+whole-repository scan. If a finding changes code, rerun only the affected leaf
+chunk and then the fan-in task; if a leaf times out, split it at its last
+verified boundary rather than retrying it unchanged.
+
 ## Scope Packet
 
 Give every worker a scope packet containing:

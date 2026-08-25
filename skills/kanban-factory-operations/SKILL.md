@@ -67,6 +67,13 @@ slice. A review timeout is an internal orchestration problem, not a product
 blocker and not approval. The implementation card remains gated only on a
 completed review verdict, not on the failed worker attempt.
 
+Chunking is hierarchical: split by acceptance question/control-flow path, then
+split again whenever a chunk crosses two runtime layers, contains more than
+five primary production files, or asks for multiple independent verdicts. Leaf
+chunks run independently; a bounded fan-in task reconciles their reports and
+acceptance coverage without rescanning the repository. Findings rerun only the
+affected leaf after a fix.
+
 ## Prerequisites
 
 Resolve before mutating the board:

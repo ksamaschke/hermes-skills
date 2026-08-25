@@ -41,6 +41,31 @@ scoped slice should finish well before it. If it does not, the review is
 incomplete and must be narrowed again; increasing the timeout is not the
 default recovery.
 
+## Hierarchical chunking
+
+Slice by acceptance question and control-flow path, then split again by size.
+Do not stop at three broad architecture categories when one category still
+crosses frontend, native bootstrap, security, and packaging boundaries.
+
+Before dispatch, build a review manifest. Every leaf chunk contains:
+
+- one acceptance question or one tightly coupled path;
+- no more than five primary production files, plus directly referenced tests or
+  configuration;
+- focused checks only, with an explicit non-goal list;
+- a 600-second cap and a compact evidence format.
+
+If a proposed chunk crosses two runtime layers, needs more than five primary
+files, or contains more than one independent verdict question, split it before
+dispatch. A typical #234 review therefore becomes separate chunks for transport
+selection, frontend HTTP parity, bootstrap/token handoff, window/origin
+capability handling, and packaging/sidecar lifecycle.
+
+After all leaf chunks finish, create one bounded fan-in/synthesis task. It reads
+the child reports and acceptance matrix, resolves contradictions, and lists
+unverified gaps; it does not repeat a repository-wide scan. A finding reruns
+only the affected leaf chunk after the implementation fix.
+
 ## Verdict rules
 
 - A final report with evidence may produce `APPROVE`, `CHANGES_REQUESTED`, or `BLOCKED`.
@@ -57,7 +82,8 @@ When a review is incomplete:
 3. preserve the timeout as `REVIEW-INCOMPLETE`, never as a finding or approval;
 4. do not retry the same broad prompt;
 5. create a new, narrower review slice with a 600-second cap and link it to the incomplete card;
-6. if a focused slice still times out, split that slice again and report the exact missing evidence;
+6. if a focused slice still times out, split that slice into leaf chunks at the
+   last verified boundary and report the exact missing evidence;
 7. do not leave the implementation card blocked merely because an internal review worker needed decomposition.
 
 If the failure is backend overload, reduce the effective reviewer cap through the supervised dispatcher owner, verify the running gateway loaded the new value, and queue excess review cards. Do not requeue a product task merely to lower the blocked count.

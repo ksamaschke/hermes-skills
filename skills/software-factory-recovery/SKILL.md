@@ -37,6 +37,13 @@ into focused read-only slices capped at 600 seconds. A timed-out slice is
 make the next slice narrower, and continue automatically until every required
 review question has a verdict or a genuine external/human limitation exists.
 
+Review decomposition is hierarchical. Split by acceptance question or
+control-flow path, then split again when a chunk crosses two runtime layers,
+contains more than five primary production files, or asks for multiple verdicts.
+Use a bounded fan-in task only after the leaf reports exist; it reconciles
+evidence and gaps without redoing the full review. A timeout creates narrower
+leaf continuations, not an unchanged retry.
+
 1. The live board, process state, runs, events, workspace, and tests outrank a digest or worker summary.
 2. One supervised dispatcher owns a board. Never start a second long-lived dispatcher to compensate for uncertainty.
 3. Preserve partial work before requeueing. Read the worktree status and prior run handoff; do not discard dirty implementation state.

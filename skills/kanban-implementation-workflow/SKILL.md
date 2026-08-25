@@ -193,9 +193,19 @@ card. Split at least the transport/bootstrap/security, frontend parity, and
 packaging/lifecycle concerns when they are all in scope. Require a heartbeat at
 phase boundaries and a partial evidence handoff before 70% of the budget.
 
+Use hierarchical chunking rather than a fixed three-card split. Build a review
+manifest and make each leaf answer one acceptance question/control-flow path
+with no more than five primary production files plus directly referenced tests
+or config. Split a leaf again when it crosses two runtime layers or contains
+multiple independent verdicts. After the leaves complete, use a bounded
+fan-in/synthesis card to reconcile reports and acceptance coverage; it must not
+repeat a whole-repository scan.
+
 If a slice times out, mark it `REVIEW-INCOMPLETE`, preserve its evidence, and
-create a narrower continuation task. Never retry the unchanged broad prompt
-and never treat the timeout as a product blocker or approval.
+create narrower leaf continuation tasks at the last verified boundary. Never
+retry the unchanged broad prompt and never treat the timeout as a product
+blocker or approval. Rerun only the affected leaf after a finding is fixed,
+then rerun synthesis.
 
 Use these canonical outcomes:
 
