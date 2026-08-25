@@ -116,8 +116,9 @@ On Karsten's machine the explicit local links are:
   `scripts/kanban_factory_recovery.py`.
 
 Existing directories were preserved under
-`~/.hermes/skills/.pre-hermes-agent-skills/` before linking. No other Hermes
-skill directory is linked by this repository.
+`~/.hermes/backups/pre-hermes-agent-skills/` before linking. Keeping the backup
+outside `~/.hermes/skills/` prevents Hermes from discovering duplicate skills.
+No other Hermes skill directory is linked by this repository.
 
 The following remain independent and are **not** symlinked by this repository:
 
