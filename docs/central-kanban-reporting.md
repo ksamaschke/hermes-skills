@@ -44,20 +44,32 @@ machine-specific full config files.
 ## Central digest contract
 
 The central Minna progress digest is the human-facing reporting path. Each run
-reads the live board and dispatcher evidence, then reports:
+reads the live board and dispatcher evidence, applies the human-impact filter
+below, and then reports:
 
 - board counts and completed work since the previous digest;
 - running, review, ready, and todo work;
-- every blocked task ID and title;
-- the blocker class: dependency, parked backlog, capability/authorization,
-  operator disposition, product failure, or orchestration failure;
-- the exact reason and the action or decision required from Karsten;
+- verified progress and active work;
+- genuine human decisions only: product/design/priority, explicit external
+  authorization that the factory cannot obtain, security/payment/credential
+  approval, deployment/release approval, or deliberate parked-task steering;
 - gateway/dispatcher health and whether `IDLE-BY-GATING` is intentional.
 
-When no work is spawnable, the digest must not stop at “IDLE-BY-GATING”. It
-must enumerate the blockers and say which ones need Karsten and which ones are
-intentionally parked. The digest must not create task subscriptions or ask a
-worker to message the user.
+Internal execution failures are not human blockers. Gateway/dispatcher
+recovery, worker timeouts, reviewer/tool capability gaps, CuaDriver/TCC state,
+provider failures, stale diagnostics, and routine board repair are owned by the
+factory. The digest may state that factory recovery is handling internal state,
+but must not ask Karsten to restart, respawn, unblock, grant permissions, or
+inspect logs.
+
+Parked backlog is not user-blocked work. Never enumerate parked task IDs, ages,
+or `stuck_in_blocked` diagnostics in the human digest. At most report
+`Parked backlog unchanged; no action required.` Never unblock or dispatch a
+parked task.
+
+When no genuine human decision exists, the digest must say `No human action
+required` and report concise verified progress. The digest must not create task
+subscriptions or ask a worker to message the user.
 
 ## Verification
 

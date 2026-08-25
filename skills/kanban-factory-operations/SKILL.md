@@ -120,13 +120,17 @@ Reconcile counts programmatically. Enumerate every active review, blocker, and r
 
 **Completion criterion:** the report names the exact current counts, every running/review/blocked task, and whether the gateway is supervised by the expected owner.
 
-For every blocked task that needs human input, include its current reason and
-required decision in the central dispatcher/digest report. Do **not** create a
-Matrix subscription for the individual task. Under the central-reporting
-policy, task-level `notify-list` entries should remain empty: workers write
-board state and events, while the dispatcher or HEX digest informs the human.
-If the central reporting path is unavailable, escalate that observability
-failure to the orchestrator rather than routing a worker directly to Matrix.
+Only genuine human decisions belong in the central dispatcher/digest report.
+Internal mechanical failures, stale diagnostics, worker/tool capability gaps,
+provider errors, gateway recovery, and routine board repair remain factory-owned
+and must not be presented as work for Karsten. Parked tasks are not human
+blockers: never enumerate their IDs or ages in the user-facing digest; never unblock or dispatch them, and at most report that parked backlog is unchanged.
+Do **not** create a Matrix subscription for the individual task. Under the
+central-reporting policy, task-level `notify-list` entries should remain empty:
+workers write board state and events, while the dispatcher or HEX digest reports
+only verified progress and genuine decisions. If the central reporting path is
+unavailable, escalate that observability failure to the orchestrator rather than
+routing a worker directly to Matrix.
 
 ### 2. Classify why work is not moving
 

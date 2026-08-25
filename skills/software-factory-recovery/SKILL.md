@@ -135,11 +135,13 @@ reads the current board snapshot, so it does not depend on replaying old task
 subscriptions.
 
 Do not create or retain per-task Matrix subscriptions under the
-central-reporting policy. `IDLE-BY-GATING` is valid only when the central
-digest includes every blocked task, its blocker class, and the exact human
-decision or action required. A missing central report is an observability
-failure owned by the orchestrator, not a reason to route a worker directly to
-the human.
+central-reporting policy. `IDLE-BY-GATING` is valid when the central digest
+reports verified progress, genuine human decisions if any, and explicitly says
+`No human action required` when internal or parked state is the only reason work
+is not spawnable. Internal failures and stale diagnostics are never a human
+repair task. Parked tasks are never unblocked or dispatched. A missing central
+report is an observability failure owned by the orchestrator, not a reason to
+route a worker directly to the human.
 
 ### 6. Verify the recovered factory
 

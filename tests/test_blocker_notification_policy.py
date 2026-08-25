@@ -28,3 +28,16 @@ def test_runtime_contract_documents_explicit_profiles_and_fallbacks():
     assert "auto_subscribe_on_create: false" in text
     assert "provider: openai-codex" in text
     assert "model: gpt-5.6-luna" in text
+
+
+def test_central_reporting_does_not_make_internal_state_a_user_chore():
+    text = (ROOT / "docs" / "central-kanban-reporting.md").read_text()
+    assert "Internal execution failures are not human blockers" in text
+    assert "Never enumerate parked task IDs" in text
+    assert "No human action" in text
+
+
+def test_factory_operations_preserve_parked_tasks_without_escalating_them():
+    text = (ROOT / "skills" / "kanban-factory-operations" / "SKILL.md").read_text()
+    assert "never unblock or dispatch them" in text
+    assert "Only genuine human decisions" in text

@@ -36,6 +36,18 @@ Separate these states:
 
 A worker saying “done” is not proof of fixed, verified, or closed.
 
+## Human-impact filter
+
+The live board may contain internal failures and intentionally parked cards.
+Those are evidence for the factory, not chores for Karsten. Human-facing
+reports expose only genuine product/design/priority decisions, external
+authorization the factory cannot obtain, security/payment/credential approval,
+deployment/release approval, or explicit steering of deliberately parked work.
+They do not enumerate parked task IDs or stale `stuck_in_blocked` diagnostics,
+and they do not ask the user to restart services, grant routine permissions,
+respawn workers, unblock cards, or inspect logs. When no genuine decision is
+needed, report `No human action required`.
+
 ## Workflow
 
 1. **Extract the complete inventory.** Copy every finding and acceptance gap from the source review, digest, issue, or user message into a numbered list. Include residuals such as placeholder URLs, incomplete tests, environment timeouts, and repository hygiene warnings.
