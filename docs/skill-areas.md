@@ -126,6 +126,22 @@ Existing directories were preserved under
 outside `~/.hermes/skills/` prevents Hermes from discovering duplicate skills.
 No other Hermes skill directory is linked by this repository.
 
+Profile-scoped workers have their own `HERMES_HOME`. The same five allowlisted
+skill links are therefore mirrored under the `reviewer`, `minna-implementer`,
+and `default` profile skill roots, and those profiles explicitly trust this
+checkout through:
+
+```yaml
+skills:
+  external_dirs:
+    - /Users/karsten/Work/Development/Samaschke/hermes-agent-skills/skills
+```
+
+The external-dir entry is required by Hermes' skill security check; a profile
+symlink alone is not sufficient when its resolved target lies outside the
+profile's local skill root. This is still an explicit five-skill allowlist, not
+automatic synchronization of the rest of Hermes' internal skills.
+
 The following remain independent and are **not** symlinked by this repository:
 
 - `hermes-agent`;
