@@ -23,6 +23,12 @@ TARGET = Path(
     )
 ).expanduser()
 
+# This shim is the entrypoint for the Minna factory job. Hermes no-agent script
+# execution supplies neither CLI arguments nor per-job environment variables;
+# preserve an explicit override but make the job's board unambiguous by default.
+if not os.environ.get("HERMES_FACTORY_BOARD"):
+    os.environ["HERMES_FACTORY_BOARD"] = "minna"
+
 if not TARGET.is_file():
     raise SystemExit(f"canonical factory recovery script not found: {TARGET}")
 
