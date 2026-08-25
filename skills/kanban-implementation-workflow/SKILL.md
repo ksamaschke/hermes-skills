@@ -182,6 +182,14 @@ When a full smoke test is required, make it a separate time-boxed card, capture 
 
 Completion criterion: headless evidence exists before any GUI attempt; GUI evidence is limited to genuinely native acceptance criteria.
 
+For native UI acceptance, separate capture from review. HEX/the orchestrator or
+an explicitly tool-capable `qa-ui` lane performs desktop input and records the
+app/window, build and process provenance, fixture hashes, screenshots, and
+live protocol checks. The independent reviewer consumes attached artifacts
+read-only. Do not dispatch a reviewer with a `macos-computer-use` skill and
+assume that the native tool exists in its schema; skills do not provision tools.
+Treat macOS TCC permission dialogs as a human-only capability boundary.
+
 ### 6. Review independently
 
 Assign review to a different profile/model family. The reviewer reads the original acceptance criteria, diff, tests, error paths, security boundaries, and deployment constraints. It reruns relevant checks where possible and reports file/line evidence.

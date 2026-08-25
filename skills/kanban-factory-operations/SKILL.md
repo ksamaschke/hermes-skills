@@ -80,6 +80,13 @@ chunks run independently; a bounded fan-in task reconciles their reports and
 acceptance coverage without rescanning the repository. Findings rerun only the
 affected leaf after a fix.
 
+Native UI evidence is a separate lane. A skill reference does not provision
+`computer_use` to a reviewer worker. Preflight the actual worker schema; if the
+tool is absent, HEX/the orchestrator performs the approved capture/input and
+attaches the screenshot, process/build provenance, fixture hash, and protocol
+checks. The reviewer then validates those artifacts read-only. TCC permission
+dialogs remain a human-only boundary and are never delegated to a worker.
+
 ## Prerequisites
 
 Resolve before mutating the board:

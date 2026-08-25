@@ -18,6 +18,24 @@ A profile or wrapper must not rely on the controller's outer `cwd` being propaga
 
 Before fan-out, verify the exact provider/model route used by the reviewer profile and the effective per-profile concurrency cap. A tiny successful probe proves route reachability only; a representative worker-sized request or concurrent run is required to establish usable capacity. Treat provider `Overloaded` responses as `REVIEW-INCOMPLETE`, not as a product verdict.
 
+## Native UI evidence ownership
+
+A loaded skill does not grant a worker a native desktop-control tool. Before
+creating a UI review card, inspect the assigned worker's actual tool schema;
+`computer_use` must be present, not merely mentioned in the prompt or attached
+as a skill.
+
+If the reviewer profile cannot drive the desktop, HEX/the orchestrator owns the
+native capture and input. It records the exact app/window, process and build
+provenance, fixture hashes, screenshots, and live protocol checks, then attaches
+those artifacts to a read-only reviewer card. That reviewer validates the
+artifacts and acceptance mapping without attempting native input itself.
+
+macOS TCC permission dialogs are a human-only boundary. Do not make a worker
+click them or classify their absence as a product finding. If capture is not
+available, record `REVIEW-INCOMPLETE` with the capability gap and keep the
+implementation card separate from the UI evidence card.
+
 Before creating a leaf, run `hermes -p <reviewer-profile> skills list` and
 verify that every forced skill is resolvable for that profile. Create the leaf
 with `max_runtime_seconds=600` and `max_retries=1`. A timeout must not trigger

@@ -49,6 +49,12 @@ on the same timed-out review prompt. Verify reviewer skill resolution before
 dispatch and record any startup capability failure separately from review
 evidence.
 
+For UI evidence, do not retry a reviewer that lacks native desktop tools. Route
+the approved capture/input to HEX/the orchestrator, attach the resulting
+artifacts, and create a read-only evidence-review continuation. TCC permission
+prompts and other OS authorization remain human-only; a worker must report the
+capability gap rather than looping or asking the user to repair the board.
+
 1. The live board, process state, runs, events, workspace, and tests outrank a digest or worker summary.
 2. One supervised dispatcher owns a board. Never start a second long-lived dispatcher to compensate for uncertainty.
 3. Preserve partial work before requeueing. Read the worktree status and prior run handoff; do not discard dirty implementation state.

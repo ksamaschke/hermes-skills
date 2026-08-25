@@ -68,6 +68,13 @@ new continuation card. Before dispatch, run a profile capability preflight
 resolvable for the assigned profile; repair the profile's trusted skill paths
 before creating the card if it is not.
 
+Skills do not grant native desktop-control tools. If a UI review needs
+`computer_use`, verify that the worker's actual tool schema exposes it. When it
+does not, HEX/the orchestrator must perform the approved native capture/input,
+attach screenshots/process/build/fixture evidence, and dispatch a reviewer
+that consumes those artifacts read-only. Never assign a UI action to a worker
+merely because `macos-computer-use` was loaded as a skill.
+
 At roughly 70% of the slice budget, stop opening new files or starting new
 checks and return the evidence already collected. A timeout is
 `REVIEW-INCOMPLETE`, never a finding, approval, or reason to retry the same
