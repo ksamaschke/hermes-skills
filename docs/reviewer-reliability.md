@@ -18,6 +18,29 @@ A profile or wrapper must not rely on the controller's outer `cwd` being propaga
 
 Before fan-out, verify the exact provider/model route used by the reviewer profile and the effective per-profile concurrency cap. A tiny successful probe proves route reachability only; a representative worker-sized request or concurrent run is required to establish usable capacity. Treat provider `Overloaded` responses as `REVIEW-INCOMPLETE`, not as a product verdict.
 
+## Review slice budget
+
+An adversarial code review is a focused slice, not a full-repository forensic
+mission. A single review card must use a `max_runtime_seconds` cap of **600
+seconds** and an explicit stop condition. Do not create a 1,200-second
+"inspect everything, run all baselines, and prove E2E" card.
+
+Split broad reviews into independent cards before dispatch. Typical slices are:
+
+- transport/bootstrap/token security;
+- frontend transport parity and UI call sites;
+- packaging, sidecar lifecycle, and regression tests.
+
+Each slice names its exact files, questions, focused checks, non-goals, and
+verdict format. Require a heartbeat at the end of each major phase. At roughly
+70% of the budget, the reviewer stops discovery and returns the evidence it has
+instead of starting another test or repository scan.
+
+The 600-second cap is a safety boundary, not an expected duration. A correctly
+scoped slice should finish well before it. If it does not, the review is
+incomplete and must be narrowed again; increasing the timeout is not the
+default recovery.
+
 ## Verdict rules
 
 - A final report with evidence may produce `APPROVE`, `CHANGES_REQUESTED`, or `BLOCKED`.
@@ -31,9 +54,11 @@ When a review is incomplete:
 
 1. inspect the worker/reviewer process and logs;
 2. verify no source files were modified;
-3. retry once with a smaller explicit scope, fewer tools, a clean profile, or a corrected absolute path;
-4. if the second attempt fails, block the card with the exact infrastructure limitation;
-5. do not repeat the same failing launch command indefinitely.
+3. preserve the timeout as `REVIEW-INCOMPLETE`, never as a finding or approval;
+4. do not retry the same broad prompt;
+5. create a new, narrower review slice with a 600-second cap and link it to the incomplete card;
+6. if a focused slice still times out, split that slice again and report the exact missing evidence;
+7. do not leave the implementation card blocked merely because an internal review worker needed decomposition.
 
 If the failure is backend overload, reduce the effective reviewer cap through the supervised dispatcher owner, verify the running gateway loaded the new value, and queue excess review cards. Do not requeue a product task merely to lower the blocked count.
 

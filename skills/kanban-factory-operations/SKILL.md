@@ -54,6 +54,19 @@ Dirty or non-managed worktrees, product failures, provider authorization,
 review findings, and deployment decisions remain explicit blockers. Do not
 modify Hermes source for these repairs.
 
+## Review budget protocol
+
+Adversarial code reviews are dispatched as focused read-only slices, not as
+one broad repository scan. Each slice uses `max_runtime_seconds=600`, names
+the exact files and questions, runs only focused checks, heartbeats at phase
+boundaries, and stops discovery at roughly 70% of its budget.
+
+If a review times out, classify it as `REVIEW-INCOMPLETE`. Preserve the run and
+its evidence, do not retry the same prompt, and create a narrower continuation
+slice. A review timeout is an internal orchestration problem, not a product
+blocker and not approval. The implementation card remains gated only on a
+completed review verdict, not on the failed worker attempt.
+
 ## Prerequisites
 
 Resolve before mutating the board:

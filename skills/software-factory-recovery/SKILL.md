@@ -31,6 +31,12 @@ The factory is an add-on around Hermes, not a replacement for Hermes runtime beh
 
 Before escalating, run the recovery layer. It promotes legacy cron snapshots with `hermes cron edit`, repairs only duplicate clean managed worktrees, preserves dirty work, unblocks only after readback, and leaves product/review/auth/capability/deployment decisions for explicit handling.
 
+Review workers have an additional contract: adversarial code review is split
+into focused read-only slices capped at 600 seconds. A timed-out slice is
+`REVIEW-INCOMPLETE`, not a finding and not a human blocker. Preserve the run,
+make the next slice narrower, and continue automatically until every required
+review question has a verdict or a genuine external/human limitation exists.
+
 1. The live board, process state, runs, events, workspace, and tests outrank a digest or worker summary.
 2. One supervised dispatcher owns a board. Never start a second long-lived dispatcher to compensate for uncertainty.
 3. Preserve partial work before requeueing. Read the worktree status and prior run handoff; do not discard dirty implementation state.

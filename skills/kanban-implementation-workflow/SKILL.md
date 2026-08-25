@@ -186,6 +186,17 @@ Completion criterion: headless evidence exists before any GUI attempt; GUI evide
 
 Assign review to a different profile/model family. The reviewer reads the original acceptance criteria, diff, tests, error paths, security boundaries, and deployment constraints. It reruns relevant checks where possible and reports file/line evidence.
 
+Create adversarial reviews as focused slices before dispatch. Each slice must
+use `max_runtime_seconds=600` and an explicit stop condition; do not put a full
+repository scan, baseline reproduction, native E2E, and security review in one
+card. Split at least the transport/bootstrap/security, frontend parity, and
+packaging/lifecycle concerns when they are all in scope. Require a heartbeat at
+phase boundaries and a partial evidence handoff before 70% of the budget.
+
+If a slice times out, mark it `REVIEW-INCOMPLETE`, preserve its evidence, and
+create a narrower continuation task. Never retry the unchanged broad prompt
+and never treat the timeout as a product blocker or approval.
+
 Use these canonical outcomes:
 
 - `APPROVE`: independent evidence is sufficient;

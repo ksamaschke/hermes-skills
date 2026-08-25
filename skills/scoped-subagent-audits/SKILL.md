@@ -53,6 +53,19 @@ work into bounded phases or run a terminal-backed worker with an explicit
 `timeout_s` of at least 900 seconds. Do not pretend the backend's hidden default
 is sufficient.
 
+### Adversarial code-review override
+
+For adversarial **code** reviews, use a maximum `max_runtime_seconds=600` per
+Kanban card, even when a broader audit would normally receive a 900- or
+1,200-second budget. Split the review before dispatch into focused slices such
+as transport/security, frontend parity, and packaging/lifecycle. Each slice
+must name its files, questions, focused tests, non-goals, and stop condition.
+
+At roughly 70% of the slice budget, stop opening new files or starting new
+checks and return the evidence already collected. A timeout is
+`REVIEW-INCOMPLETE`, never a finding, approval, or reason to retry the same
+broad prompt. Decompose and create a narrower continuation card instead.
+
 ## Scope Packet
 
 Give every worker a scope packet containing:
