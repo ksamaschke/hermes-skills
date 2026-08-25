@@ -46,6 +46,10 @@ See [`docs/skill-areas.md`](docs/skill-areas.md) for the area-of-interest map,
 the software-factory skill set, supporting files, and the explicit Hermes
 synchronization allowlist.
 
+Central Kanban reporting, the versioned runtime configuration contract, and
+the dispatcher/digest boundary are documented in
+[`docs/central-kanban-reporting.md`](docs/central-kanban-reporting.md).
+
 ## Tracker adapters
 
 The workflow supports both self-hosted Forgejo and GitHub. The project policy selects the adapter and source-of-truth conventions:

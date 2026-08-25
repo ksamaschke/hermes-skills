@@ -113,13 +113,13 @@ Reconcile counts programmatically. Enumerate every active review, blocker, and r
 
 **Completion criterion:** the report names the exact current counts, every running/review/blocked task, and whether the gateway is supervised by the expected owner.
 
-For every blocked task that needs human input, inspect its
-`hermes kanban notify-list <task_id> --json` result. Imported or legacy tasks
-may have no origin subscription even though the board contains a blocker
-comment. When the current origin is known, create a `notify+wake`
-`notify-subscribe` entry, read it back, and deliver a current handoff because
-subscriptions do not replay old blocked events. A human blocker without a
-subscription must never be left silently in `IDLE-BY-GATING`.
+For every blocked task that needs human input, include its current reason and
+required decision in the central dispatcher/digest report. Do **not** create a
+Matrix subscription for the individual task. Under the central-reporting
+policy, task-level `notify-list` entries should remain empty: workers write
+board state and events, while the dispatcher or HEX digest informs the human.
+If the central reporting path is unavailable, escalate that observability
+failure to the orchestrator rather than routing a worker directly to Matrix.
 
 ### 2. Classify why work is not moving
 

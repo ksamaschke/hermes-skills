@@ -1,0 +1,5 @@
+# User-local runtime contract for central Kanban reporting.
+# Apply with: hermes config set kanban.auto_subscribe_on_create false
+# Do not copy secrets or the complete ~/.hermes/config.yaml into Git.
+kanban:
+  auto_subscribe_on_create: false
