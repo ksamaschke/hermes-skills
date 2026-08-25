@@ -3,10 +3,11 @@
 version: 1
 
 tracker:
-  kind: forgejo # or github
-  repository: owner/repository
-  cli: tea # or gh
-  dependency_source: body_marker # body_marker is portable; native/sub_issues require tracker support
+  kind: forgejo # forgejo, github, gitlab, bitbucket, or custom
+  project: owner/repository
+  adapter: tea # provider CLI/API/webhook adapter
+  base_url: null # required for self-hosted or custom trackers
+  dependency_source: body_marker # body_marker, native, or sub_issues when supported
   issue_labels:
     parked: parked
     epic: epic
@@ -15,11 +16,12 @@ tracker:
 profiles:
   orchestrator: default
   implementer: implementer
-  reviewer: reviewer
-  reviewer_model_default: null # e.g. provider/strong-model-id
-  reviewer_model_routine: null # e.g. provider/routine-model-id
-  implementer_vendor_family: null # null = unknown; review remains PRELIMINARY
-  reviewer_vendor_family: null # null = unknown; review remains PRELIMINARY
+  code_reviewer: reviewer # concrete profile name may remain reviewer
+  completion_verifier: null # optional concrete profile name
+  code_reviewer_model_default: null # e.g. provider/strong-model-id
+  code_reviewer_model_routine: null # e.g. provider/routine-model-id
+  implementer_vendor_family: null # null = unknown; review remains REVIEW-INCOMPLETE until independent
+  code_reviewer_vendor_family: null # null = unknown; review remains REVIEW-INCOMPLETE until independent
   qa_ui: null # policy role key -> profile name
   release_operator: null # policy role key -> profile name
 
@@ -28,7 +30,7 @@ kanban:
   auto_decompose_per_tick: 3
   max_in_progress: 8 # total cap; tune for aggregate backend capacity
   max_in_progress_per_profile: 2 # conservative start; raise after a capacity probe
-  dispatcher_owner: supervised_gateway # supervised_gateway | standalone | external
+  dispatcher_owner: supervised_gateway # the shared factory supports only the supervised gateway owner
   review_dispatch: false
 
 verification:

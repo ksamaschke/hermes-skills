@@ -1,8 +1,21 @@
-# hermes-skills
+# hermes-software-factory
 
 Reusable workflow skills for [Hermes Agent](https://hermes-agent.nousresearch.com/), focused on durable multi-agent engineering, review, and operations.
 
-This repository is intentionally **policy-aware rather than policy-hardcoded**. The skills define safe defaults and require each project to declare its tracker (Forgejo or GitHub), test gate, deployment policy, profiles, and operational constraints.
+This repository is intentionally **policy-aware rather than policy-hardcoded**. The skills define safe defaults and require each project to declare its tracker (Forgejo/Gitea, GitHub, GitLab, Bitbucket, or a custom adapter), test gate, deployment policy, profiles, and operational constraints.
+
+## Shared factory versus project add-ons
+
+The shared factory provides the mechanics and invariants: source identity,
+Kanban state, isolated worktrees, claims, retries, review gates, evidence, and
+one supervised dispatcher. Project overlays and external add-ons provide tracker
+hosts, repository mappings, labels, acceptance gates, model routes, and product-
+specific automation.
+
+If multiple factories share a host but their tools, permissions, memory, or
+routing differ, create custom profiles and map them in project policy. Do not
+modify these shared skills or Hermes core to fit one project or product. Product
+adapters are separate deliverables.
 
 ## Included skills
 
@@ -12,9 +25,23 @@ A bounded audit/review procedure that requires explicit working scope,
 appropriate time budgets, checkpoints, timeout recovery, and parent-side
 verification of worker claims.
 
+### `kanban-reviewer-contract`
+
+A typed reviewer role contract: fresh exact-scope packets, read-only source
+boundaries, one-lens 600-second leaves, one retry, structured verdicts, and
+separate orchestrator/tracker mutation.
+
+### `tracker-kanban-reconciliation`
+
+A project-agnostic tracker-to-Kanban adapter contract for Forgejo/Gitea, GitHub,
+GitLab, Bitbucket, and custom REST/CLI/webhook sources. It covers canonical
+identity, idempotent intake tasks, actionability/dependency mapping, conservative
+source-state reconciliation, and supervised-dispatch separation. Concrete
+projects provide overlays or external add-ons.
+
 ### `kanban-implementation-workflow`
 
-A Forgejo/GitHub + Hermes Kanban workflow for:
+A tracker-agnostic Hermes Kanban workflow for:
 
 - importing actionable issues while excluding tracking epics;
 - turning `Depends on:` into real task dependencies;
@@ -56,14 +83,19 @@ contract is documented in
 
 ## Tracker adapters
 
-The workflow supports both self-hosted Forgejo and GitHub. The project policy selects the adapter and source-of-truth conventions:
+The workflow supports multiple code and issue trackers through declared
+adapters. The project policy selects the adapter and source-of-truth conventions:
 
-- Forgejo: use `tea` or the Forgejo REST API;
+- Forgejo/Gitea: use `tea` or the Forgejo REST API;
 - GitHub: use `gh` or the GitHub REST/GraphQL API;
-- preserve each tracker’s native issue URLs, labels, comments, and dependency conventions;
-- do not assume that a GitHub milestone, Forgejo epic label, or project-board field has the same meaning on another tracker.
+- GitLab: use the GitLab CLI/API or a project-owned client;
+- Bitbucket: use the Bitbucket CLI/API or a project-owned client;
+- custom systems: use a deterministic REST, GraphQL, CLI, or webhook adapter;
+- preserve each provider’s native issue URLs, labels, comments, and dependency conventions;
+- do not assume that a GitHub milestone, Forgejo epic label, GitLab issue type, Bitbucket pull request, or custom field has the same meaning on another tracker.
 
-The Kanban card format is tracker-neutral: retain the source tracker, issue number, URL, labels, body, and parent dependencies in imported metadata.
+The Kanban card format is tracker-neutral: retain the source kind, project,
+item key, URL, labels/fields, body, and parent dependencies in imported metadata.
 
 ## Install
 
@@ -71,22 +103,28 @@ Install the Skill directly from GitHub:
 
 ```bash
 hermes skills install \
-  https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/kanban-implementation-workflow/SKILL.md
+  https://raw.githubusercontent.com/ksamaschke/hermes-software-factory/main/skills/kanban-implementation-workflow/SKILL.md
 
 hermes skills install \
-  https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/kanban-factory-operations/SKILL.md
+  https://raw.githubusercontent.com/ksamaschke/hermes-software-factory/main/skills/kanban-factory-operations/SKILL.md
 
 hermes skills install \
-  https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/kanban-progress-evidence/SKILL.md
+  https://raw.githubusercontent.com/ksamaschke/hermes-software-factory/main/skills/kanban-progress-evidence/SKILL.md
 
 hermes skills install \
-  https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/software-factory-recovery/SKILL.md
+  https://raw.githubusercontent.com/ksamaschke/hermes-software-factory/main/skills/kanban-reviewer-contract/SKILL.md
+
+hermes skills install \
+  https://raw.githubusercontent.com/ksamaschke/hermes-software-factory/main/skills/tracker-kanban-reconciliation/SKILL.md
+
+hermes skills install \
+  https://raw.githubusercontent.com/ksamaschke/hermes-software-factory/main/skills/software-factory-recovery/SKILL.md
 ```
 
 Once installed, load the set explicitly for a session:
 
 ```bash
-hermes --skills kanban-implementation-workflow,kanban-factory-operations,kanban-progress-evidence,software-factory-recovery
+hermes --skills kanban-implementation-workflow,kanban-factory-operations,kanban-progress-evidence,kanban-reviewer-contract,tracker-kanban-reconciliation,software-factory-recovery
 ```
 
 The deterministic recovery add-on is installed separately from the skill
@@ -119,16 +157,17 @@ Use [`examples/project-policy.yaml`](examples/project-policy.yaml) as a starting
 Profiles represent **roles, permissions, and model routing**, not repositories:
 
 ```text
-orchestrator  →  implementer  →  reviewer  →  integrator/release
-     │              │               │              │
-  kanban only   write worktree   read-only      project policy
+orchestrator  →  implementer  →  code-reviewer  →  completion-verifier  →  release
+     │              │                  │                    │
+  kanban/tracker  write worktree   read-only packet     evidence/board
 ```
 
 Recommended reusable profile roles:
 
-- `orchestrator` — decomposes, routes, comments, and manages WIP; no code writes;
+- `orchestrator` — decomposes, routes, manages WIP, and owns tracker writes; no code writes;
 - `implementer` — TDD-first code changes in isolated worktrees;
-- `reviewer` — independent read-only review using a different model/vendor family;
+- `code-reviewer` — independent read-only review from a fresh typed packet;
+- `completion-verifier` — checks review coverage, acceptance evidence, and board transitions;
 - `qa-ui` — optional native/browser verification lane for UI-only acceptance;
 - `release-operator` — optional project-policy-controlled release/GitOps lane.
 
@@ -181,6 +220,8 @@ For recurring updates, use a continuity-enabled cron digest and deliver it to a 
 
 ```text
 skills/scoped-subagent-audits/SKILL.md       bounded audit/review procedure
+skills/kanban-reviewer-contract/SKILL.md     typed reviewer role contract
+skills/tracker-kanban-reconciliation/SKILL.md  source reconciliation contract
 skills/kanban-implementation-workflow/SKILL.md  reusable agent procedure
 skills/kanban-factory-operations/SKILL.md       live factory operation and recovery
 skills/kanban-factory-operations/references/    runtime drift and stall recovery
@@ -188,11 +229,14 @@ skills/kanban-progress-evidence/SKILL.md        evidence and closure accounting
 skills/kanban-progress-evidence/references/     closure matrix template
 skills/software-factory-recovery/SKILL.md      autonomous recovery procedure
 scripts/kanban_factory_recovery.py              deterministic recovery add-on
-examples/project-policy.yaml                    adaptable Forgejo/GitHub policy template
+examples/project-policy.yaml                    adaptable tracker policy template
 docs/profile-roles.md                            reusable profile role model
+docs/reviewer-role-contract.md                   project-agnostic reviewer boundary
+docs/profile-environment-contract.md             profile/worktree environment preflight
+docs/tracker-kanban-reconciliation.md            project-agnostic source adapter contract
 docs/policy-resolution.md                        project-specific adaptation guide
 docs/reviewer-reliability.md                     bounded review and failure recovery
-docs/tracker-adapters.md                         Forgejo/GitHub import guidance
+docs/tracker-adapters.md                         multi-provider tracker adapter guidance
 tests/test_skill_frontmatter.py                 lightweight package validation
 ```
 

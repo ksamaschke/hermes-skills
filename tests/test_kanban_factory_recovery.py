@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 from pathlib import Path
 
 
@@ -57,10 +58,12 @@ def test_parked_acknowledgement_is_idempotent():
     )
 
 
-def test_minna_cron_shim_supplies_board_when_scheduler_has_no_arguments():
+def test_cron_shim_requires_explicit_board_and_script():
     text = CRON_SHIM.read_text(encoding="utf-8")
-    assert 'os.environ["HERMES_FACTORY_BOARD"] = "minna"' in text
+    assert 'os.environ.get("HERMES_FACTORY_RECOVERY_SCRIPT")' in text
     assert 'os.environ.get("HERMES_FACTORY_BOARD")' in text
+    assert "HERMES_FACTORY_RECOVERY_SCRIPT is required" in text
+    assert "HERMES_FACTORY_BOARD is required" in text
 
 
 def test_repo_root_resolves_git_common_dir_for_linked_worktree(monkeypatch):
@@ -72,6 +75,34 @@ def test_repo_root_resolves_git_common_dir_for_linked_worktree(monkeypatch):
         else (1, "", ""),
     )
     assert factory._repo_root(Path("/repo/.worktrees/t_done")) == Path("/repo")
+
+
+def test_real_linked_worktree_reports_common_root_and_branch(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "factory@example.invalid"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Factory Test"],
+        check=True,
+    )
+    (repo / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "README.md"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "test fixture"], check=True)
+    linked = repo / ".worktrees" / "t_done"
+    linked.parent.mkdir()
+    subprocess.run(
+        [
+            "git", "-C", str(repo), "worktree", "add", "-q", "-b",
+            "kanban/project-231", str(linked), "HEAD",
+        ],
+        check=True,
+    )
+    assert factory._repo_root(linked) == repo.resolve()
+    assert factory._worktree_branch(linked) == "kanban/project-231"
 
 
 def test_repair_preserves_collision_when_branch_does_not_match(monkeypatch, tmp_path):

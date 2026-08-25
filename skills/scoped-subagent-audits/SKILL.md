@@ -39,6 +39,13 @@ Never dispatch a broad "inspect everything" task with the default timeout.
 Never let a worker discover its own scope by recursively scanning the whole
 repository.
 
+For Kanban code reviews, the audit task is a fresh read-only review card, not an
+implementation card with a new assignee. The packet must prohibit source edits,
+tracker issue creation, child-task creation, deployment, and unrelated
+reassignment. The reviewer may write only scratch evidence outside the source
+worktree and its own structured terminal verdict. Findings and tracker updates
+are separate orchestrator work.
+
 ## Time Budget
 
 Use these minimum budgets when the execution backend exposes a timeout:

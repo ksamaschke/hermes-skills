@@ -1,6 +1,6 @@
 ---
 name: kanban-implementation-workflow
-description: "Forgejo/GitHub Kanban work with TDD and review."
+description: "Tracker-agnostic Kanban work with TDD and review."
 version: 1.1.0
 author: Karsten Samaschke (ksamaschke), Hermes Agent
 license: MIT
@@ -8,12 +8,25 @@ platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [forgejo, github, kanban, orchestration, tdd, review, testing, gitops]
-    related_skills: [kanban-factory-operations, kanban-progress-evidence, software-factory-recovery]
+    related_skills: [kanban-factory-operations, kanban-progress-evidence, software-factory-recovery, kanban-reviewer-contract, tracker-kanban-reconciliation]
 ---
 
-# Forgejo/GitHub + Hermes Kanban Implementation Workflow
+# Tracker + Hermes Kanban Implementation Workflow
 
-Use this skill when a Forgejo or GitHub backlog should be implemented through Hermes Kanban workers while an orchestrator owns decomposition, verification, review, and delivery. The workflow is intentionally policy-driven: it does not assume a repository, branch, model vendor, deployment controller, or profile roster.
+Use this skill when a code or issue-tracking backlog should be implemented through Hermes Kanban workers while an orchestrator owns decomposition, verification, review, and delivery. The workflow is intentionally policy-driven: it does not assume a tracker, repository, branch, model vendor, deployment controller, or profile roster.
+
+## Shared factory versus project customization
+
+The shared factory owns durable mechanics and safety invariants: source identity,
+Kanban state, isolated worktrees, claims, retries, review gates, evidence, and
+one supervised dispatcher. Project policy and external add-ons own tracker
+hosts, repository mappings, labels, acceptance gates, model routes, and
+project-specific automation.
+
+If multiple factories on one host need different tools, permissions, memory, or
+routing, create custom profiles and map them in project policy. Do not modify the
+shared skills or Hermes core to fit one product, and do not treat a project
+adapter as a new universal factory rule.
 
 ## When to use
 
@@ -31,7 +44,8 @@ Do not use it to bypass project rules, deploy without an approved rollout policy
 
 Resolve these before creating ready work:
 
-- tracker kind and repository identity (Forgejo or GitHub);
+- tracker kind and project identity;
+- source adapter and dependency convention;
 - base/integration branch;
 - project-local instructions (`AGENTS.md`, `CLAUDE.md`, or equivalent);
 - headless test/build commands;
@@ -41,9 +55,9 @@ Resolve these before creating ready work:
 - WIP and concurrency limits.
 - dispatcher owner, effective runtime policy, and the supported reload path.
 
-If deployment policy is absent, do not mutate production state. Use the public policy template at https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/examples/project-policy.yaml as a starting point, not as a universal policy.
+If deployment policy is absent, do not mutate production state. Use the public policy template at https://raw.githubusercontent.com/ksamaschke/hermes-software-factory/main/examples/project-policy.yaml as a starting point, not as a universal policy.
 
-Requires: `git` and `hermes`; use `tea` for Forgejo or `gh` for GitHub.
+Requires: `git`, `hermes`, and the project-declared tracker adapter.
 
 ## Roles and dedicated profiles
 
@@ -51,7 +65,7 @@ Profiles represent reusable roles, permissions, and model routing rather than re
 
 - `orchestrator` — Kanban-only decomposition, routing, WIP, and human decisions;
 - `implementer` — TDD-first writes in isolated worktrees;
-- `reviewer` — independent read-only review using a different model/vendor family;
+- `code-reviewer` — independent read-only review using a different model/vendor family;
 - optional `qa-ui` — native/browser verification for UI-only acceptance;
 - optional `release-operator` — project-policy-controlled release or GitOps work.
 
@@ -97,24 +111,38 @@ Command examples use POSIX shell syntax. On Windows, translate them to PowerShel
 
 Completion criterion: the shared checkout is explainably clean, preserved work is recoverable, and the selected base commit is verified.
 
-### 2. Import the live Forgejo or GitHub backlog
+### 2. Import the live tracker backlog
 
-Fetch the live open issues with the project's declared adapter:
+Fetch the complete live work-item set with the project's declared adapter. The
+adapter may be a provider CLI, REST/GraphQL client, webhook consumer, or a
+project-owned script. Normalize the result into tracker-neutral fields:
 
-- Forgejo: loop `tea issues list --repo owner/repository --state open --kind issues --page N --limit 100 --output json` until an empty page;
-- GitHub: use `gh api --paginate -X GET repos/owner/repository/issues -f state=open -f per_page=100`, filter pull requests, and normalize the returned issue fields.
+- stable provider item key and exact URL;
+- kind, state, title, body, labels/fields, comments, timestamps;
+- declared or native dependencies;
+- target repository and project mapping.
 
-Do not rely only on stale local mapping documents.
+Provider examples include paginated `tea` issue reads for Forgejo/Gitea and
+`gh api --paginate` for GitHub. GitLab, Bitbucket, and custom systems must use
+their declared adapter rather than being forced through either command. Do not
+rely only on stale local mapping documents.
 
-For either adapter, fetch comments for each retained issue with the tracker’s per-issue command/API, then compare the Kanban import count against the complete paginated source set, not one page.
+Fetch comments/activity for each retained item with the adapter, then compare the
+Kanban import count against the complete paginated source set, not one page. The
+project policy declares how dependencies and tracking-only work are identified;
+do not infer equivalence between tracker features.
 
-For GitHub, the project policy must set `tracker.dependency_source` to `body_marker`, `native`, or `sub_issues`. For Forgejo, use the declared body/label/native dependency convention. Do not infer equivalence between tracker features.
+Import actionable items, not tracking epics. Preserve the source key, URL, kind,
+title, body, labels/fields, comments, and dependency metadata. Keep parked or
+human-only work out of ready dispatch.
 
-Import actionable sub-issues, not tracking epics. Preserve issue number, URL, title, body, labels, comments, and dependency metadata. Keep parked issues blocked for human steering.
+Create or match canonical intake tasks before dependent children and pass real
+parent IDs during child creation. Use an idempotency key per source item. Validate
+the imported count programmatically before proceeding.
 
-Create parents before children and pass real parent IDs during child creation. Use an idempotency key per source issue. Validate the imported count programmatically before proceeding.
-
-Completion criterion: every requested non-epic issue is represented exactly once and every declared dependency is encoded as a board link.
+Completion criterion: every requested actionable item is represented exactly once
+or has an explicit one-to-many decomposition, and every declared execution
+dependency is encoded as a board link or recorded as deferred.
 
 ### 3. Decompose into many small cards
 
@@ -192,7 +220,19 @@ Treat macOS TCC permission dialogs as a human-only capability boundary.
 
 ### 6. Review independently
 
-Assign review to a different profile/model family. The reviewer reads the original acceptance criteria, diff, tests, error paths, security boundaries, and deployment constraints. It reruns relevant checks where possible and reports file/line evidence.
+Create a fresh review task from a typed packet; do not reuse the implementation
+card body with a new assignee. Use `kanban-reviewer-contract` and assign a
+profile from a different vendor family when possible. The packet names the
+candidate commit, exact file paths, one review lens, focused commands,
+`read_only_source=true`, `max_runtime_seconds=600`, `max_retries=1`, and a stop
+condition. The reviewer reads the original acceptance criteria, diff, tests,
+error paths, security boundaries, and deployment constraints. It reruns
+relevant checks where possible and reports file/line evidence.
+
+A reviewer does not implement fixes, file source-tracker issues, create Kanban
+children, reassign work, or deploy. The orchestrator owns findings adjudication,
+source-tracker writes, continuations, and rework routing. A review protocol that
+needs code is an implementation task, not reviewer work.
 
 Create adversarial reviews as focused slices before dispatch. Each slice must
 use `max_runtime_seconds=600` and an explicit stop condition; do not put a full
@@ -222,11 +262,14 @@ then rerun synthesis.
 
 Use these canonical outcomes:
 
-- `APPROVE`: independent evidence is sufficient;
-- `CHANGES_REQUESTED`: create/reopen focused implementation work;
-- `BLOCKED`: genuine human/external decision only;
-- `PRELIMINARY`: same-family or incomplete evidence, never final sign-off;
-- `REVIEW-INCOMPLETE`: the reviewer did not reach or finish the target; never approval.
+- `APPROVED`: independent evidence is sufficient;
+- `CHANGES_REQUESTED`: a reproducible defect or acceptance gap routes to focused implementation work;
+- `REVIEW-INCOMPLETE`: the reviewer did not reach or finish the target, or the packet/capability was invalid.
+
+`PRELIMINARY` is a non-terminal evidence qualifier for same-family, unknown-family,
+or partial coverage; it maps to `REVIEW-INCOMPLETE` when final independent review
+is required. `BLOCKED` is an orchestrator/board state for a genuine external or
+human decision; a reviewer does not emit it as a leaf verdict.
 
 Completion criterion: no code card is accepted as final solely from its implementer’s report.
 
@@ -291,7 +334,7 @@ Use `CI=1` and `TERM=dumb` for non-interactive Hermes CLI review sessions when s
 
 Also record the exact provider/model route and effective reviewer concurrency cap. A catalog entry or one successful completion is not evidence that concurrent review workers can run safely.
 
-On incomplete review: inspect logs/processes, verify no source files changed, retry once with a smaller explicit scope or clean profile, then block with the exact limitation. Do not repeat the same failed launch indefinitely. The final handoff names the target commit, files inspected, checks run, findings, verdict, and limitations. See https://github.com/ksamaschke/hermes-skills/blob/main/docs/reviewer-reliability.md.
+On incomplete review: inspect logs/processes, verify no source files changed, retry once with a smaller explicit scope or clean profile, then block with the exact limitation. Do not repeat the same failed launch indefinitely. The final handoff names the target commit, files inspected, checks run, findings, verdict, and limitations. See https://github.com/ksamaschke/hermes-software-factory/blob/main/docs/reviewer-reliability.md.
 
 ## Policy adaptation
 
@@ -305,7 +348,7 @@ Do not copy project-specific assumptions into this skill. Put them in a project 
 - notification destination;
 - protected paths and secrets policy.
 
-See https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/examples/project-policy.yaml and https://github.com/ksamaschke/hermes-skills/blob/main/docs/policy-resolution.md in the public collection repository.
+See https://raw.githubusercontent.com/ksamaschke/hermes-software-factory/main/examples/project-policy.yaml and https://github.com/ksamaschke/hermes-software-factory/blob/main/docs/policy-resolution.md in the public collection repository.
 
 ## Pitfalls
 

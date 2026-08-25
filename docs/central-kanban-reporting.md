@@ -43,8 +43,8 @@ machine-specific full config files.
 
 ## Central digest contract
 
-The central Minna progress digest is the human-facing reporting path. Each run
-reads the live board and dispatcher evidence, applies the human-impact filter
+The central factory progress digest is the human-facing reporting path. Each
+run reads the live board and dispatcher evidence, applies the human-impact filter
 below, and then reports:
 
 - board counts and completed work since the previous digest;
@@ -67,6 +67,12 @@ or `stuck_in_blocked` diagnostics in the human digest. At most report
 `Parked backlog unchanged; no action required.` Never unblock or dispatch a
 parked task.
 
+The external recovery add-on writes one idempotent machine acknowledgement to
+each imported parked card. This is durable board evidence that the blocked state
+is intentional and prevents the generic stale-blocked diagnostic from treating
+the card as abandoned. The acknowledgement never changes status, assignee, or
+dispatchability.
+
 When no genuine human decision exists, the digest must say `No human action
 required` and report concise verified progress. The digest must not create task
 subscriptions or ask a worker to message the user.
@@ -77,9 +83,9 @@ From the active Hermes profile, verify:
 
 ```bash
 hermes config get kanban.auto_subscribe_on_create
-hermes kanban --board minna stats --json
-hermes kanban --board minna list --status blocked --json
-hermes kanban --board minna notify-list --json
+hermes kanban --board <board> stats --json
+hermes kanban --board <board> list --status blocked --json
+hermes kanban --board <board> notify-list --json
 hermes gateway status
 ```
 

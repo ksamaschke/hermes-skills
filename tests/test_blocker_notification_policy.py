@@ -20,14 +20,14 @@ def test_recovery_requires_current_handoff_for_old_blocked_events():
     assert "Do not create or retain per-task Matrix subscriptions" in text
 
 
-def test_runtime_contract_documents_explicit_profiles_and_fallbacks():
+def test_runtime_contract_documents_generic_profiles_and_fallbacks():
     text = (ROOT / "docs" / "kanban-factory-runtime.md").read_text()
-    assert "Human-facing default profile" in text
-    assert "The decomposer is not a separate Hermes profile" in text
-    assert "implementation-skills.yaml" in text
+    assert "## Role routing" in text
+    assert "The decomposer creates a task graph" in text
+    assert "project policy" in text
     assert "auto_subscribe_on_create: false" in text
-    assert "provider: openai-codex" in text
-    assert "model: gpt-5.6-luna" in text
+    assert "auxiliary provider" in text
+    assert "model" in text
 
 
 def test_central_reporting_does_not_make_internal_state_a_user_chore():

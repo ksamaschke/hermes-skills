@@ -2,6 +2,35 @@
 
 A reviewer is only useful if the review actually reached the intended target and returned a bounded, evidence-based verdict.
 
+## Fresh review contract
+
+A review card is created from a fresh packet. Do not reuse an implementation card
+with a new assignee. The packet must contain the candidate commit, exact file
+paths, one acceptance question/lens, focused commands, explicit non-goals,
+`read_only_source: true`, a 600-second adversarial leaf cap, one retry, and a
+stop condition.
+
+Reviewers may not implement fixes, edit the candidate, file or edit tracker
+issues, create Kanban children, reassign unrelated work, deploy, or mutate live
+infrastructure. If the packet asks for any of those actions, return
+`REVIEW-INCOMPLETE: invalid review packet` and do not improvise a broader scope.
+The orchestrator owns issue filing, continuations, fan-in, and rework routing.
+
+## Profile environment boundary
+
+The controller shell is not the worker shell. A Hermes profile can resolve a
+different `HERMES_HOME`, config, skills, toolsets, `cwd`, interpreter, dependency
+manager, credentials, and command path. Before dispatch, run the smallest
+project-declared environment probe through the exact reviewer profile and
+worktree. Record interpreter/version, required commands, dependency activation,
+and non-secret capability names.
+
+A controller-side passing test does not satisfy reviewer-side evidence. Missing
+pytest, cargo, pnpm, a project virtual environment, a skill, a tool, or a target
+path is a capability gap and yields `REVIEW-INCOMPLETE`, not a product finding.
+Repair the profile/project environment or create a narrower continuation; do not
+retry the same prompt unchanged. See `docs/profile-environment-contract.md`.
+
 ## Required preflight
 
 Before reading the diff, the reviewer must:
@@ -92,10 +121,10 @@ only the affected leaf chunk after the implementation fix.
 
 ## Verdict rules
 
-- A final report with evidence may produce `APPROVE`, `CHANGES_REQUESTED`, or `BLOCKED`.
-- Target-not-found, wrong-cwd, terminal-clear failure, tool timeout, iteration exhaustion, missing credentials, or process crash produces `REVIEW-INCOMPLETE`.
+- A final report with evidence may produce `APPROVED` or `CHANGES_REQUESTED`.
+- Target-not-found, wrong-cwd, terminal-clear failure, tool timeout, iteration exhaustion, missing credentials, process crash, same-family review, unknown-family review, or partial coverage produces `REVIEW-INCOMPLETE`.
 - `REVIEW-INCOMPLETE` is never approval and must not advance a code card.
-- A same-family, unknown-family, or partial review is `PRELIMINARY`, not independent sign-off.
+- `BLOCKED` is an orchestrator/board state for a genuine external or human decision, not a reviewer verdict.
 
 ## Recovery
 

@@ -11,6 +11,8 @@ EXPECTED_SKILL_FILES = {
     ROOT / "skills" / "kanban-implementation-workflow" / "SKILL.md",
     ROOT / "skills" / "kanban-factory-operations" / "SKILL.md",
     ROOT / "skills" / "kanban-progress-evidence" / "SKILL.md",
+    ROOT / "skills" / "kanban-reviewer-contract" / "SKILL.md",
+    ROOT / "skills" / "tracker-kanban-reconciliation" / "SKILL.md",
 }
 EXPECTED_REFERENCE_FILES = {
     ROOT / "skills" / "kanban-factory-operations" / "references" / "dispatcher-runtime-drift.md",
@@ -25,6 +27,10 @@ PUBLIC_TEXT_FILES = [
     ROOT / "docs" / "profile-roles.md",
     ROOT / "docs" / "tracker-adapters.md",
     ROOT / "docs" / "reviewer-reliability.md",
+    ROOT / "docs" / "reviewer-role-contract.md",
+    ROOT / "docs" / "profile-environment-contract.md",
+    ROOT / "docs" / "tracker-kanban-reconciliation.md",
+    ROOT / "docs" / "kanban-factory-runtime.md",
     ROOT / "LICENSE",
     ROOT / "tests" / "test_skill_frontmatter.py",
     ROOT / "requirements-dev.txt",
@@ -78,14 +84,15 @@ def test_skill_frontmatter_and_layout():
 
 def test_policy_parses_and_declares_roles_safety_and_deployment():
     policy = yaml.safe_load(POLICY.read_text(encoding="utf-8"))
-    assert policy["tracker"]["kind"] in {"forgejo", "github"}
+    assert policy["tracker"]["kind"] in {"forgejo", "github", "gitlab", "bitbucket", "custom"}
     assert policy["tracker"]["dependency_source"] in {"body_marker", "native", "sub_issues"}
     if policy["tracker"]["kind"] == "forgejo":
         assert policy["tracker"]["dependency_source"] != "sub_issues"
     assert set(policy["profiles"]) >= {
         "orchestrator",
         "implementer",
-        "reviewer",
+        "code_reviewer",
+        "completion_verifier",
         "qa_ui",
         "release_operator",
     }
@@ -122,9 +129,9 @@ def test_public_files_have_no_machine_or_secret_identifiers():
     assert not re.search(forbidden[5], combined)
 
     skill = CORE_SKILL.read_text(encoding="utf-8").lower()
-    assert "tea issues list" in skill
-    assert "gh api" in skill
-    assert "--paginate" in skill and "--page" in skill
+    assert "tea" in skill
+    assert "gh api --paginate" in skill
+    assert "pagination" in skill or "paginate" in skill
 
 
 if __name__ == "__main__":

@@ -32,6 +32,8 @@ _COLLISION_RE = re.compile(
     re.IGNORECASE,
 )
 
+_PARKED_ACK_MARKER = "[factory] parked backlog acknowledged"
+
 
 def _run(argv: list[str], *, cwd: Path | None = None) -> tuple[int, str, str]:
     proc = subprocess.run(
@@ -125,6 +127,51 @@ def _task_detail(board: str, task_id: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def _is_parked(task: dict[str, Any]) -> bool:
+    labels = task.get("labels") or []
+    if isinstance(labels, list) and any(
+        str(label).strip().lower() == "parked" for label in labels
+    ):
+        return True
+    body = str(task.get("body") or "")
+    return bool(re.search(r"(?im)^\s*-\s*Labels:\s*.*\bparked\b", body))
+
+
+def _parked_acknowledged(detail: dict[str, Any]) -> bool:
+    comments = detail.get("comments") or []
+    return any(
+        _PARKED_ACK_MARKER in str(comment.get("body") or "").lower()
+        for comment in comments
+        if isinstance(comment, dict)
+    )
+
+
+def _acknowledge_parked(
+    board: str, task: dict[str, Any], *, dry_run: bool
+) -> str | None:
+    task_id = str(task.get("id") or "")
+    if not task_id or task.get("status") != "blocked" or not _is_parked(task):
+        return None
+    detail = _task_detail(board, task_id)
+    if not detail or _parked_acknowledged(detail):
+        return None
+    message = (
+        f"{_PARKED_ACK_MARKER}: this task is intentionally parked by policy; "
+        "preserve blocked state and do not dispatch or auto-unblock."
+    )
+    if dry_run:
+        return f"would acknowledge intentionally parked task {task_id}"
+    code, stdout, stderr = _hermes(
+        "kanban", "--board", board, "comment", task_id, message
+    )
+    if code != 0:
+        return f"{task_id}: parked acknowledgement failed: {stderr or stdout}"
+    verify = _task_detail(board, task_id)
+    if not verify or not _parked_acknowledged(verify):
+        return f"{task_id}: parked acknowledgement write was not verified"
+    return f"acknowledged intentionally parked task {task_id}; preserved blocked state"
+
+
 def _latest_spawn_error(detail: dict[str, Any]) -> str:
     runs = detail.get("runs") or []
     for run in reversed(runs):
@@ -156,10 +203,25 @@ def _git_status(path: Path) -> tuple[bool, str]:
 
 
 def _repo_root(path: Path) -> Path | None:
-    code, stdout, _ = _run(["git", "-C", str(path), "rev-parse", "--show-toplevel"])
+    code, stdout, _ = _run(["git", "-C", str(path), "rev-parse", "--git-common-dir"])
     if code != 0 or not stdout:
         return None
-    return Path(stdout).expanduser().resolve(strict=False)
+    common = Path(stdout)
+    if not common.is_absolute():
+        common = path / common
+    common = common.expanduser().resolve(strict=False)
+    if common.name != ".git":
+        return None
+    return common.parent
+
+
+def _worktree_branch(path: Path) -> str | None:
+    code, stdout, _ = _run(
+        ["git", "-C", str(path), "symbolic-ref", "--quiet", "--short", "HEAD"]
+    )
+    if code != 0 or not stdout:
+        return None
+    return stdout.strip()
 
 
 def _repair_collision(board: str, task: dict[str, Any], *, dry_run: bool) -> str | None:
@@ -170,6 +232,8 @@ def _repair_collision(board: str, task: dict[str, Any], *, dry_run: bool) -> str
     task_row = detail.get("task") or {}
     if task_row.get("status") != "blocked":
         return None
+    if _is_parked(task) or _is_parked(task_row):
+        return None
     error = _latest_spawn_error(detail)
     collision = _collision(error)
     if collision is None:
@@ -178,6 +242,12 @@ def _repair_collision(board: str, task: dict[str, Any], *, dry_run: bool) -> str
     repo = _repo_root(occupied)
     if repo is None or occupied == repo or not occupied.is_dir():
         return f"{task_id}: collision path is not a managed linked worktree"
+    actual_branch = _worktree_branch(occupied)
+    if actual_branch != branch:
+        return (
+            f"{task_id}: preserved worktree {occupied}; collision branch {branch!r} "
+            f"does not match checked-out branch {actual_branch!r}"
+        )
     owner_id = occupied.name
     if not owner_id.startswith("t_"):
         return f"{task_id}: preserved worktree with non-task owner {occupied}"
@@ -227,6 +297,9 @@ def recover(board: str, *, dry_run: bool = False) -> list[str]:
         return changes
     for task in tasks:
         if isinstance(task, dict):
+            change = _acknowledge_parked(board, task, dry_run=dry_run)
+            if change:
+                changes.append(change)
             change = _repair_collision(board, task, dry_run=dry_run)
             if change:
                 changes.append(change)
@@ -235,9 +308,11 @@ def recover(board: str, *, dry_run: bool = False) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--board", default=os.environ.get("HERMES_FACTORY_BOARD", "minna"))
+    parser.add_argument("--board", default=os.environ.get("HERMES_FACTORY_BOARD"))
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
+    if not args.board:
+        parser.error("--board or HERMES_FACTORY_BOARD is required")
     try:
         changes = recover(args.board, dry_run=args.dry_run)
     except Exception as exc:

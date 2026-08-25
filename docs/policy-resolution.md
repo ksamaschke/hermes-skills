@@ -23,9 +23,9 @@ The same section should declare conservative execution limits and the dispatcher
 
 Project policy should declare:
 
-- Forgejo/GitHub repository and base branch;
+- tracker project and base branch;
 - labels that mean epic, parked, ready, or human decision;
-- implementer/reviewer/orchestrator profile names;
+- implementer, code-reviewer, completion-verifier, and orchestrator profile names;
 - model tiers and provider routing;
 - focused headless test/build/lint commands;
 - whether a UI smoke test exists and how it is run;

@@ -8,7 +8,7 @@ platforms: [linux, macos, windows]
 metadata:
   hermes:
     tags: [kanban, evidence, verification, orchestration, audit]
-    related_skills: [kanban-implementation-workflow, kanban-factory-operations, software-factory-recovery]
+    related_skills: [kanban-implementation-workflow, kanban-factory-operations, software-factory-recovery, kanban-reviewer-contract, tracker-kanban-reconciliation]
 ---
 
 # Kanban Progress Evidence
@@ -35,6 +35,11 @@ Separate these states:
 - **closed** — the acceptance gate is satisfied and the board state reflects it.
 
 A worker saying “done” is not proof of fixed, verified, or closed.
+
+A review verdict is valid only when a fresh review packet records the candidate
+commit, exact scope, independent profile, read-only boundary, focused checks,
+terminal outcome, and mutation check. A timeout, crash, missing scope, tracker
+mutation, or absent verdict is `REVIEW-INCOMPLETE`, never approval.
 
 ## Human-impact filter
 
@@ -139,6 +144,7 @@ For every timeout, also record the command or worker action, time limit, result,
 - [ ] Complete source inventory reconciled against live board JSON.
 - [ ] Every concern has a durable evidence target or is explicitly marked untracked.
 - [ ] Parent and child dependency states were inspected.
+- [ ] Every review task has a fresh packet and exact-scope read-only evidence.
 - [ ] Comments, status changes, and task creation were read back after writes.
 - [ ] Worker handoffs are separated from independent verification.
 - [ ] Timeouts record command, ceiling, result, owner, and closure condition.

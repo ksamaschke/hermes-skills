@@ -29,7 +29,7 @@ Treat internal execution failures as factory-owned. Do not leave work human-bloc
 
 The factory is an add-on around Hermes, not a replacement for Hermes runtime behavior. Keep deterministic repairs in `~/.hermes/scripts/kanban_factory_recovery.py` and user-owned cron/board operations. Do not modify Hermes source for per-job pinning or routine worktree recovery.
 
-Before escalating, run the recovery layer. It promotes legacy cron snapshots with `hermes cron edit`, repairs only duplicate clean managed worktrees, preserves dirty work, unblocks only after readback, and leaves product/review/auth/capability/deployment decisions for explicit handling.
+Before escalating, run the recovery layer. It promotes legacy cron snapshots with `hermes cron edit`, repairs only duplicate clean managed linked worktrees after resolving the shared Git common directory and verifying the occupied worktree is checked out to the reported branch, preserves dirty work, unblocks only after readback, and leaves product/review/auth/capability/deployment decisions for explicit handling.
 
 Review workers have an additional contract: adversarial code review is split
 into focused read-only slices capped at 600 seconds. A timed-out slice is
@@ -142,6 +142,11 @@ is not spawnable. Internal failures and stale diagnostics are never a human
 repair task. Parked tasks are never unblocked or dispatched. A missing central
 report is an observability failure owned by the orchestrator, not a reason to
 route a worker directly to the human.
+
+The recovery add-on acknowledges imported parked cards once, idempotently, with
+durable machine evidence that their blocked state is intentional. It does not
+change their status, assignee, or dispatchability. This repairs stale generic
+blocked diagnostics without hiding or advancing parked work.
 
 ### 6. Verify the recovered factory
 

@@ -1,156 +1,140 @@
 # Kanban Factory Runtime and Routing Contract
 
-This document describes the Hermes Kanban runtime contract used by the Minna
-factory. It is a versioned policy/example, not a copy of a user's complete
-`~/.hermes/config.yaml`. Secrets, credentials, machine paths, and unrelated
-personal settings remain local.
+This document defines reusable runtime mechanics for a Hermes Kanban software
+factory. It is not a complete project configuration and does not select a
+repository, tracker host, model, profile name, deployment controller, or
+notification room.
+
+Project-specific values belong in a project policy file or external add-on.
+When several factories share a host but need different tools, permissions,
+memory, or routing, create custom profiles and map them in those overlays. Keep
+the lifecycle and safety invariants below unchanged.
 
 ## Required runtime settings
 
-The current Minna baseline uses these `kanban` values:
+A project policy should declare values equivalent to these, tuned from live
+capacity rather than copied blindly:
 
 ```yaml
 kanban:
-  # One supervised gateway owns the dispatcher.
   dispatch_in_gateway: true
-
-  # Review cards are dispatched to the reviewer profile automatically.
   review_dispatch: true
-
-  # Bounded dispatcher cadence and worker recovery.
   dispatch_interval_seconds: 60
   failure_limit: 2
   dispatch_stale_timeout_seconds: 14400
   worker_max_turns: 250
-
-  # Capacity limits. Tune from observed backend and host capacity.
   max_in_progress: 8
   max_in_progress_per_profile: 2
-
-  # Triage decomposition is bounded per tick.
   auto_decompose: true
   auto_decompose_per_tick: 3
-
-  # Human reporting is centralised in the dispatcher/HEX digest.
   auto_subscribe_on_create: false
 ```
 
-`failure_limit: 2` is a global implementation/recovery breaker. Review leaf
-cards still set `max_retries: 1` individually so one incomplete review prompt is
-not retried unchanged. Lowering the global breaker to `1` would unnecessarily
-make transient implementation failures human blockers.
+One supervised gateway owns dispatcher promotion, claims, worktrees,
+heartbeats, retries, and recovery. A source reconciler or progress digest does
+not start another dispatcher.
 
-`dispatch_stale_timeout_seconds` requires long-running workers to emit
-heartbeats. A stale reclaim returns the task to `ready`; it is not proof that
-the product work failed.
+`failure_limit` is a recovery breaker, not a review verdict. Review leaves set
+`max_retries: 1` individually and use a 600-second cap. A timeout, crash, or
+spawn failure is `REVIEW-INCOMPLETE`, never approval.
 
-The authoritative Hermes defaults and lifecycle semantics are documented in the
-[Kanban feature guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban)
-and [worker-lane guide](https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban-worker-lanes).
+## Role routing
 
-## Human-facing default profile
+Profiles represent reusable roles, not repositories:
 
-`orchestrator_profile` and `default_assignee` are separate settings:
+- `orchestrator`: decomposition, routing, WIP, adjudication, and tracker writes;
+- `implementer`: TDD-first changes in an isolated worktree;
+- `code-reviewer`: independent, read-only review from a fresh packet;
+- `completion-verifier`: review coverage and board evidence, not code review;
+- optional `qa-ui`: native/browser evidence;
+- optional `release-operator`: policy-controlled release or GitOps work.
 
-```yaml
-kanban:
-  orchestrator_profile: ""
-  default_assignee: ""
-```
+A profile name does not establish these permissions. The project overlay maps
+logical roles to exact existing profile names and verifies them before dispatch.
 
-An empty `orchestrator_profile` falls back to the active default profile for
-the root/orchestration task after decomposition. That is intentional when the
-human-facing `default` profile is HEX's orchestration and reporting profile.
-There is no need to invent a separate orchestrator profile just to name the
-same role twice.
+## Profile environment preflight
 
-An empty `default_assignee` also falls back to the active default profile when
-the decomposer selects an unknown profile. That is safe only when:
+The controller and worker profile are separate runtime layers. Verify the
+profile-scoped `HERMES_HOME`, config, skills, actual tools, `cwd`, interpreter,
+project dependency activation, command paths, and non-secret external capability
+names through the same profile that will execute the task.
 
-- normal implementation and review cards carry explicit valid assignees; and
-- the decomposer's profile roster and descriptions are maintained so unknown
-  routes are exceptional.
+A controller-side test pass is supplementary only. Missing commands, packages,
+interpreters, tools, skills, or target paths produce `REVIEW-INCOMPLETE` for
+review work and a factory capability diagnostic for implementation work. Repair
+the profile/project environment or create a narrower continuation; do not retry
+an unchanged prompt. See `docs/profile-environment-contract.md`.
 
-Setting `default_assignee: minna-implementer` is an alternative policy for a
-factory that wants unknown implementation children to fall into the worker
-lane. It is **not** automatically correct for a human-facing default profile,
-because it changes where malformed or ambiguous decomposition results go.
-Choose it deliberately rather than treating it as a missing required value.
+## Review dispatch contract
 
-## Decomposer model
+Every adversarial review leaf is a fresh task with:
 
-`auto_decompose: true` invokes Hermes' built-in decomposer through the auxiliary
-LLM slot:
+- candidate commit, exact worktree, and exact file paths;
+- one acceptance question and one review lens;
+- focused commands and explicit non-goals;
+- `read_only_source: true`;
+- `max_runtime_seconds: 600`;
+- `max_retries: 1`;
+- a structured verdict and stop condition.
 
-```yaml
-auxiliary:
-  kanban_decomposer:
-    provider: <explicit-provider>
-    model: <explicit-model>
-```
+Do not reuse an implementation card with a new assignee. Reviewers do not
+implement fixes, file tracker issues, create Kanban children, deploy, or mutate
+live infrastructure. Those actions belong to the orchestrator or a separate
+implementer/release task. See `docs/reviewer-role-contract.md`.
 
-The decomposer is not a separate Hermes profile and does not load the
-orchestrator profile's prompt or skills. It produces a task graph; the
-`orchestrator_profile` only controls ownership of the resulting root task.
-The dispatcher then spawns explicit profile workers for the child tasks.
+## Source reconciliation
 
-The current Minna setting is explicitly pinned:
+A source tracker reconciliation adapter is an external boundary:
 
-```yaml
-auxiliary:
-  kanban_decomposer:
-    provider: openai-codex
-    model: gpt-5.6-luna
-```
+- source tracker owns issue identity, labels, source state, and declared
+  dependencies;
+- the reconciler projects actionable work into Kanban using stable identities;
+- Kanban owns claims, worktrees, retries, reviews, and evidence;
+- the gateway owns dispatch.
 
-This reuses the verified main/implementer route and makes decomposition
-reproducible for this factory. It remains a Minna-specific choice: another
-factory may select a different provider/model after its own bounded quality,
-latency, and cost probe. The reusable skills do not impose this model.
+The adapter is configuration-driven. It must not hardcode project hosts,
+repositories, checkout paths, labels, profile names, or model routes into the
+shared skills. See `docs/tracker-kanban-reconciliation.md`.
 
-## Explicit profiles versus implicit subagents
+## Decomposition and auxiliary models
 
-The current architecture uses explicit Hermes profiles:
+If a project enables automatic decomposition, it declares the auxiliary provider
+and model in project policy. The decomposer creates a task graph; it does not
+become an implicit worker profile and does not override explicit assignees.
 
-- `default`: human-facing HEX/orchestration/reporting session;
-- `minna-implementer`: implementation worker process;
-- `reviewer`: independent read-only review worker process.
+Unknown profile routes must be surfaced as configuration errors or mapped by the
+project's declared policy. Do not silently send malformed review work to an
+implementer or malformed implementation work to a reviewer.
 
-The gateway dispatcher still spawns worker **processes** for assigned tasks. It
-does not use `delegate_task`-style implicit subagents for the Kanban lifecycle.
-The auxiliary decomposer is an LLM call inside the dispatcher, not an implicit
-worker profile.
+## Capacity and reload semantics
 
-A project `implementation-skills.yaml` is therefore not required by Hermes
-Kanban when explicit profiles and task routing are the source of truth. Such a
-file only makes sense if the project also uses the separate
-implementation-skills/`isc` pipeline for model lanes, gate commands, commits,
-PRs, or delegation. If that pipeline is not used, references requiring that
-file should be removed rather than adding a redundant policy layer.
+A successful small model probe proves route reachability, not worker-sized
+capacity. Observe representative requests and concurrent behavior before
+raising per-profile fan-out. Provider overload is an infrastructure condition,
+not a product verdict.
+
+Some gateway watchers snapshot concurrency and review settings at startup.
+After changing them, use only the supervised lifecycle and read back the new
+running policy, gateway process, board claims, worker PIDs, and heartbeats.
+Never start an unmanaged gateway to apply a setting.
 
 ## Verification
 
-From the active Hermes profile:
+From the active profile, verify the effective policy and live owner:
 
-```bash
-hermes config get kanban.dispatch_in_gateway
-hermes config get kanban.review_dispatch
-hermes config get kanban.worker_max_turns
-hermes config get kanban.max_in_progress
-hermes config get kanban.max_in_progress_per_profile
-hermes config get kanban.auto_decompose
-hermes config get kanban.auto_subscribe_on_create
-hermes kanban --board minna dispatch --dry-run --json
-hermes kanban assignees --json
-hermes gateway status
+```text
+terminal(command="hermes config get kanban.dispatch_in_gateway")
+terminal(command="hermes config get kanban.review_dispatch")
+terminal(command="hermes config get kanban.max_in_progress")
+terminal(command="hermes config get kanban.max_in_progress_per_profile")
+terminal(command="hermes kanban assignees --json")
+terminal(command="hermes gateway status")
 ```
 
-For a central-reporting deployment, also verify:
+For each review task, read back the packet, candidate commit, exact scope,
+assignee, runtime/retry fields, run outcome, and mutation check. For each source
+adapter, perform two stable dry runs before enabling recurring writes.
 
-```bash
-hermes kanban --board minna notify-list --json
-hermes cron list --all
-```
-
-The task-level notification list should be empty. Human updates come from the
-central digest, not individual workers.
+Do not report the factory as healthy from a PID, digest, model catalog entry,
+or worker summary alone. Require board events, run outcomes, evidence, and the
+correct role transition.

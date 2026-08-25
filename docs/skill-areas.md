@@ -14,7 +14,7 @@ These skills form the software-factory operating set:
 
 Use for:
 
-- Forgejo/GitHub issue import and dependency mapping;
+- tracker issue import and dependency mapping;
 - task decomposition and WIP limits;
 - TDD-first implementation in isolated worktrees;
 - independent review and verification;
@@ -77,6 +77,34 @@ Use for:
 It supports the factory but is not a dispatcher or implementation workflow by
 itself.
 
+### `kanban-reviewer-contract`
+
+**Primary concern:** typed, bounded, read-only review work.
+
+Use for:
+
+- fresh review packets instead of assignee-only handoffs;
+- exact-scope, one-lens review leaves;
+- profile/worktree environment preflight;
+- 600-second adversarial caps and one retry;
+- `APPROVED`, `CHANGES_REQUESTED`, and `REVIEW-INCOMPLETE` outcomes;
+- keeping tracker mutation, implementation, and deployment outside the review.
+
+### `tracker-kanban-reconciliation`
+
+**Primary concern:** project-specific tracker-to-Kanban source reconciliation.
+
+Use for:
+
+- canonical issue identity and idempotent intake tasks;
+- configurable tracker adapters, actionability labels, states, and dependency fields;
+- conservative source-state reconciliation;
+- project overlays and external poller/add-on design;
+- preserving the supervised gateway as the only dispatcher.
+
+The skill defines the reusable adapter contract. A concrete product must provide
+its own overlay or add-on rather than modifying the shared skill.
+
 ## Repository-owned supporting files
 
 - `scripts/kanban_factory_recovery.py` — deterministic recovery add-on;
@@ -95,60 +123,30 @@ Only these installed skill directories are symlinked to this repository:
 - `kanban-implementation-workflow`;
 - `kanban-factory-operations`;
 - `kanban-progress-evidence`;
+- `kanban-reviewer-contract`;
+- `tracker-kanban-reconciliation`;
 - `software-factory-recovery`.
 
 The symlink destinations are category-specific under `~/.hermes/skills/`. The
 repository path is authoritative for the linked directories; changes in the
 checkout are immediately visible to Hermes after the normal skill reload.
 
-On Karsten's machine the explicit local links are:
+The category-specific links are established by the local installation and may
+use `<HERMES_HOME>` or profile-scoped `HERMES_HOME` roots. A generic local
+installation can map:
 
-- `~/.hermes/skills/autonomous-ai-agents/scoped-subagent-audits` →
-  `skills/scoped-subagent-audits`;
-- `~/.hermes/skills/software-development/kanban-implementation-workflow` →
-  `skills/kanban-implementation-workflow`;
-- `~/.hermes/skills/software-development/kanban-factory-operations` →
-  `skills/kanban-factory-operations`;
-- `~/.hermes/skills/autonomous-ai-agents/kanban-progress-evidence` →
-  `skills/kanban-progress-evidence`;
-- `~/.hermes/skills/software-development/software-factory-recovery` →
-  `skills/software-factory-recovery`;
-- `~/.hermes/scripts/kanban_factory_recovery.py` →
-  `scripts/kanban_factory_recovery.py`.
+- `<HERMES_HOME>/skills/.../scoped-subagent-audits` → `skills/scoped-subagent-audits`;
+- `<HERMES_HOME>/skills/.../kanban-implementation-workflow` → `skills/kanban-implementation-workflow`;
+- `<HERMES_HOME>/skills/.../kanban-factory-operations` → `skills/kanban-factory-operations`;
+- `<HERMES_HOME>/skills/.../kanban-progress-evidence` → `skills/kanban-progress-evidence`;
+- `<HERMES_HOME>/skills/.../kanban-reviewer-contract` → `skills/kanban-reviewer-contract`;
+- `<HERMES_HOME>/skills/.../tracker-kanban-reconciliation` → `skills/tracker-kanban-reconciliation`;
+- `<HERMES_HOME>/skills/.../software-factory-recovery` → `skills/software-factory-recovery`.
 
-The cron job uses `~/.hermes/scripts/kanban_factory_recovery_cron.py`, which is
-deliberately a regular file because Hermes rejects a cron script whose resolved
-path leaves the scripts directory. The shim delegates to the canonical linked
-recovery script above.
-
-Existing directories were preserved under
-`~/.hermes/backups/pre-hermes-agent-skills/` before linking. Keeping the backup
-outside `~/.hermes/skills/` prevents Hermes from discovering duplicate skills.
-No other Hermes skill directory is linked by this repository.
-
-Profile-scoped workers have their own `HERMES_HOME`. The same five allowlisted
-skill links are therefore mirrored under the `reviewer`, `minna-implementer`,
-and `default` profile skill roots, and those profiles explicitly trust this
-checkout through:
-
-```yaml
-skills:
-  external_dirs:
-    - /Users/karsten/Work/Development/Samaschke/hermes-agent-skills/skills
-```
-
-The external-dir entry is required by Hermes' skill security check; a profile
-symlink alone is not sufficient when its resolved target lies outside the
-profile's local skill root. This is still an explicit five-skill allowlist, not
-automatic synchronization of the rest of Hermes' internal skills.
-
-The following remain independent and are **not** symlinked by this repository:
-
-- `hermes-agent`;
-- `kanban-worker`;
-- `kanban-orchestrator`;
-- `subscription-agent-steering`;
-- other internal, vendor, platform, or user-specific skills.
+The external-dir entry must be explicitly trusted by each profile that loads
+these links. Profile-specific paths, tracker values, and credentials stay in
+local profile or project configuration and are never copied into this public
+repository.
 
 Adding another symlink requires an explicit allowlist change. A skill being
 related to the factory does not implicitly grant synchronization ownership.
@@ -159,7 +157,7 @@ From this checkout:
 
 ```bash
 hermes skills install \
-  https://raw.githubusercontent.com/ksamaschke/hermes-skills/main/skills/kanban-implementation-workflow/SKILL.md
+  https://raw.githubusercontent.com/ksamaschke/hermes-software-factory/main/skills/kanban-implementation-workflow/SKILL.md
 
 install -m 755 scripts/kanban_factory_recovery.py \
   ~/.hermes/scripts/kanban_factory_recovery.py
