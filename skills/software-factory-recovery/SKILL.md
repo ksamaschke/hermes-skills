@@ -44,6 +44,11 @@ Use a bounded fan-in task only after the leaf reports exist; it reconciles
 evidence and gaps without redoing the full review. A timeout creates narrower
 leaf continuations, not an unchanged retry.
 
+Leaf cards use `max_retries=1`; the dispatcher must not consume a second attempt
+on the same timed-out review prompt. Verify reviewer skill resolution before
+dispatch and record any startup capability failure separately from review
+evidence.
+
 1. The live board, process state, runs, events, workspace, and tests outrank a digest or worker summary.
 2. One supervised dispatcher owns a board. Never start a second long-lived dispatcher to compensate for uncertainty.
 3. Preserve partial work before requeueing. Read the worktree status and prior run handoff; do not discard dirty implementation state.

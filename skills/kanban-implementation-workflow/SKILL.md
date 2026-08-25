@@ -193,6 +193,11 @@ card. Split at least the transport/bootstrap/security, frontend parity, and
 packaging/lifecycle concerns when they are all in scope. Require a heartbeat at
 phase boundaries and a partial evidence handoff before 70% of the budget.
 
+Set `max_retries=1` on every review leaf and preflight the assigned profile's
+skill resolution before dispatch. A timed-out leaf is `REVIEW-INCOMPLETE` and
+must be replaced by a narrower continuation; never let the dispatcher retry
+the unchanged prompt automatically.
+
 Use hierarchical chunking rather than a fixed three-card split. Build a review
 manifest and make each leaf answer one acceptance question/control-flow path
 with no more than five primary production files plus directly referenced tests

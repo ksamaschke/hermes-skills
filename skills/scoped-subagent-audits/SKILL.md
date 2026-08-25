@@ -61,6 +61,13 @@ Kanban card, even when a broader audit would normally receive a 900- or
 as transport/security, frontend parity, and packaging/lifecycle. Each slice
 must name its files, questions, focused tests, non-goals, and stop condition.
 
+Create each Kanban leaf with `max_retries=1`. A timeout is incomplete evidence,
+not a reason for the dispatcher to respawn the same prompt. Recovery owns the
+new continuation card. Before dispatch, run a profile capability preflight
+(`hermes -p <reviewer-profile> skills list`) and verify that this skill is
+resolvable for the assigned profile; repair the profile's trusted skill paths
+before creating the card if it is not.
+
 At roughly 70% of the slice budget, stop opening new files or starting new
 checks and return the evidence already collected. A timeout is
 `REVIEW-INCOMPLETE`, never a finding, approval, or reason to retry the same

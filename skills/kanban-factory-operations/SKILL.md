@@ -61,6 +61,12 @@ one broad repository scan. Each slice uses `max_runtime_seconds=600`, names
 the exact files and questions, runs only focused checks, heartbeats at phase
 boundaries, and stops discovery at roughly 70% of its budget.
 
+Create each leaf with `max_retries=1` and preflight the assigned reviewer with
+`hermes -p <reviewer-profile> skills list`. A timed-out leaf must not be
+automatically respawned with the same prompt; preserve it as
+`REVIEW-INCOMPLETE`, then create a narrower continuation after confirming the
+profile can resolve the required skills.
+
 If a review times out, classify it as `REVIEW-INCOMPLETE`. Preserve the run and
 its evidence, do not retry the same prompt, and create a narrower continuation
 slice. A review timeout is an internal orchestration problem, not a product

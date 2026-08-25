@@ -18,6 +18,12 @@ A profile or wrapper must not rely on the controller's outer `cwd` being propaga
 
 Before fan-out, verify the exact provider/model route used by the reviewer profile and the effective per-profile concurrency cap. A tiny successful probe proves route reachability only; a representative worker-sized request or concurrent run is required to establish usable capacity. Treat provider `Overloaded` responses as `REVIEW-INCOMPLETE`, not as a product verdict.
 
+Before creating a leaf, run `hermes -p <reviewer-profile> skills list` and
+verify that every forced skill is resolvable for that profile. Create the leaf
+with `max_runtime_seconds=600` and `max_retries=1`. A timeout must not trigger
+an unchanged automatic retry; recovery creates a new continuation card after
+preserving the partial evidence.
+
 ## Review slice budget
 
 An adversarial code review is a focused slice, not a full-repository forensic

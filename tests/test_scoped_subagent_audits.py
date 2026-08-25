@@ -25,6 +25,8 @@ def test_scoped_audit_skill_frontmatter_and_policy():
     assert "explicit scoped working set" in text
     assert "900 seconds" in text
     assert "1,200 seconds" in text
+    assert "max_retries=1" in text
+    assert "skills list" in text
     assert "timeout is a failed/incomplete audit" in text
     assert "parent" in text.lower() and "verify" in text.lower()
     assert len(text) <= 100_000
