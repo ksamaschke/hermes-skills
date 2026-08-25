@@ -80,6 +80,7 @@ itself.
 ## Repository-owned supporting files
 
 - `scripts/kanban_factory_recovery.py` — deterministic recovery add-on;
+- `scripts/kanban_factory_recovery_cron.py` — regular in-directory cron shim;
 - `tests/test_kanban_factory_recovery.py` — regression tests for collision parsing;
 - `skills/kanban-factory-operations/references/` — runtime drift and stall recovery;
 - `skills/kanban-progress-evidence/references/` — closure-matrix template;
@@ -114,6 +115,11 @@ On Karsten's machine the explicit local links are:
   `skills/software-factory-recovery`;
 - `~/.hermes/scripts/kanban_factory_recovery.py` →
   `scripts/kanban_factory_recovery.py`.
+
+The cron job uses `~/.hermes/scripts/kanban_factory_recovery_cron.py`, which is
+deliberately a regular file because Hermes rejects a cron script whose resolved
+path leaves the scripts directory. The shim delegates to the canonical linked
+recovery script above.
 
 Existing directories were preserved under
 `~/.hermes/backups/pre-hermes-agent-skills/` before linking. Keeping the backup
