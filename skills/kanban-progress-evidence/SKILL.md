@@ -17,7 +17,9 @@ metadata:
 
 Use when auditing a Kanban digest, reviewing progress or risk, reconciling worker claims with the live board, deciding whether work is safe to close, or checking that every stated concern has durable evidence.
 
-This is the evidence and closure layer around Kanban orchestration: the orchestrator routes work; this skill proves that every stated concern has a durable record and that “done” means independently verified.
+This is the evidence and closure layer around Kanban orchestration: the
+orchestrator decides and routes work; this skill verifies that every stated
+concern has a durable record and that “done” means independently verified.
 
 ## Core rule
 
@@ -35,6 +37,16 @@ Separate these states:
 - **closed** — the acceptance gate is satisfied and the board state reflects it.
 
 A worker saying “done” is not proof of fixed, verified, or closed.
+
+## Decision authority and ladder
+
+The orchestrator owns routine technical and operational decisions. Evidence
+verifies the effect after an action; it does not return routine decisions to the
+operator. Use the shared decision ladder in `docs/profile-roles.md` for every
+selected issue or locked lane: bind identity and current state, diagnose cause
+or uncertainty, choose the next phase, assign ownership and dependencies, act,
+read back the mutation, preserve the prior decision while newer work is in
+flight, and report the decision separately from liveness.
 
 A review verdict is valid only when a fresh review packet records the candidate
 commit, exact scope, independent profile, read-only boundary, focused checks,
@@ -106,13 +118,21 @@ Untracked planning files, generated artifacts, or dirty checkouts are not automa
 
 ## Reporting template
 
-Use the closure-matrix fields below. In a repository checkout, `references/closure-matrix.md` provides the same template as a reusable file; the procedure does not depend on that file being separately installed. The final report should contain:
+Use the closure-matrix fields below. In a repository checkout, `references/closure-matrix.md` provides the same template as a reusable file; the procedure does not depend on that file being separately installed. The final report should lead with:
 
-- **Inventory:** every concern, numbered.
-- **Evidence:** exact task/comment/issue/artifact for each.
-- **State:** recorded, queued, gated, blocked, fixed, verified, or closed.
-- **Gaps:** anything still only mentioned or only summarized.
-- **Decision:** whether to continue, recover a worker, block release, or accept a residual risk.
+- **Decision:** what the orchestrator chose;
+- **Durable action:** what changed and was read back;
+- **Progress:** independently verified result;
+- **Not progressing:** work not advancing;
+- **Why:** current cause;
+- **Boundary:** internal or external;
+- **Owner:** responsible role or lane;
+- **Evidence:** exact task/comment/issue/artifact;
+- **Next gate:** condition for progress.
+
+Then include the complete **Inventory**, **State**, and **Gaps** sections. Keep
+counts as supporting context and distinguish the last completed decision from a
+newer decision in flight.
 
 ## Closure matrix template
 

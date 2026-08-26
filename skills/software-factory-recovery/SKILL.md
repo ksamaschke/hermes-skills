@@ -31,6 +31,12 @@ The factory is an add-on around Hermes, not a replacement for Hermes runtime beh
 
 Before escalating, run the recovery layer. It promotes legacy cron snapshots with `hermes cron edit`, repairs only duplicate clean managed linked worktrees after resolving the shared Git common directory and verifying the occupied worktree is checked out to the reported branch, preserves dirty work, unblocks only after readback, and leaves product/review/auth/capability/deployment decisions for explicit handling.
 
+The orchestrator owns the recovery decision: it chooses whether to replan, split,
+reassign, requeue, unblock, replace, or retire work. The recovery layer and
+dispatcher carry out only the permitted mechanical action. Preserve useful work;
+do not bypass review or policy, start a second dispatcher, or take destructive
+or irreversible action without rollback or approval.
+
 Review workers have an additional contract: adversarial code review is split
 into focused read-only slices capped at 600 seconds. A timed-out slice is
 `REVIEW-INCOMPLETE`, not a finding and not a human blocker. Preserve the run,

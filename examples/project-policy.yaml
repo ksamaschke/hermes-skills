@@ -25,6 +25,47 @@ profiles:
   qa_ui: null # policy role key -> profile name
   release_operator: null # policy role key -> profile name
 
+decision_authority:
+  mode: delegated # delegated | approval_required
+  default: smallest_adequate_policy_compliant
+  delegated_scope:
+    - backlog_admission
+    - decomposition
+    - ownership
+    - sequencing
+    - architecture
+    - remediation
+    - recovery
+    - review_routing
+    - dependency_resolution
+    - artifact_publication
+    - non_production_rollout
+    - issue_state_progression
+  non_delegable:
+    - production_approval
+    - destructive_or_irreversible_action_without_rollback
+    - undefined_safety_critical_value
+    - undefined_security_privacy_compliance_or_legal_risk
+    - materially_contradictory_requirements
+    - unavailable_capability_or_credential
+    - material_unapproved_cost_customer_or_data_retention_impact
+  required_decision_record:
+    - decision
+    - rationale
+    - assumptions
+    - owner
+    - dependencies
+    - acceptance_evidence
+    - rollback_or_fallback
+    - next_gate
+
+operator_bridge:
+  mode: central_transport_only
+  enabled: true
+  request_marker: OPERATOR_INPUT_REQUIRED
+  response_marker: DECISION
+  dedupe_on: [source_item, change_request, kanban_task, evidence_fingerprint]
+
 kanban:
   auto_decompose: true
   auto_decompose_per_tick: 3

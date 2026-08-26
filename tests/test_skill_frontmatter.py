@@ -25,6 +25,7 @@ PUBLIC_TEXT_FILES = [
     POLICY,
     ROOT / "docs" / "policy-resolution.md",
     ROOT / "docs" / "profile-roles.md",
+    ROOT / "docs" / "orchestrator-soul-template.md",
     ROOT / "docs" / "tracker-adapters.md",
     ROOT / "docs" / "reviewer-reliability.md",
     ROOT / "docs" / "reviewer-role-contract.md",

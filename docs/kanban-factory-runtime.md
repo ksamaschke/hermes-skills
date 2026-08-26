@@ -42,7 +42,8 @@ spawn failure is `REVIEW-INCOMPLETE`, never approval.
 
 Profiles represent reusable roles, not repositories:
 
-- `orchestrator`: decomposition, routing, WIP, adjudication, and tracker writes;
+- `orchestrator`: operating and architecture authority for decomposition,
+  architecture, routing, WIP, adjudication, recovery, and tracker writes;
 - `implementer`: TDD-first changes in an isolated worktree;
 - `code-reviewer`: independent, read-only review from a fresh packet;
 - `completion-verifier`: review coverage and board evidence, not code review;
@@ -51,6 +52,13 @@ Profiles represent reusable roles, not repositories:
 
 A profile name does not establish these permissions. The project overlay maps
 logical roles to exact existing profile names and verifies them before dispatch.
+
+The orchestrator is the default decision-maker between desired outcomes and
+worker execution. It drives routine architecture, sequencing, remediation,
+recovery, routing, and next-phase decisions within project policy. The gateway
+dispatcher remains a mechanical lifecycle owner. See
+[`docs/profile-roles.md`](profile-roles.md#orchestrator) for the shared
+authority and guardrail contract.
 
 ## Profile environment preflight
 

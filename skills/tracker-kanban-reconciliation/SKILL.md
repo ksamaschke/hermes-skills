@@ -24,6 +24,10 @@ inside Hermes core. The first run is always a dry run. Do not create tasks until
 source identity, target repositories, profiles, dependencies, and counts have
 been reconciled.
 
+The orchestrator is the operating and architecture authority for the resulting
+task graph and execution decisions within project policy. The reconciler still
+owns source normalization and projection; it does not become a dispatcher.
+
 ## Factory core versus project add-on
 
 The shared factory provides durable mechanics: source identity, reconciliation,

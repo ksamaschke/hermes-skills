@@ -4,12 +4,33 @@ The workflow skill is reusable only when project-specific decisions stay outside
 
 ## Resolution order
 
-1. Direct user instruction.
+1. Explicit user instruction or standing delegation.
 2. Repository rules (`AGENTS.md`, `CLAUDE.md`, `.cursor/rules`, or equivalent).
-3. A project policy file such as `examples/project-policy.yaml` copied into the target repository.
-4. Kanban task fields and comments.
-5. Skill defaults.
-6. Ask or block if a safety-critical value is still unspecified.
+3. Project policy, such as `examples/project-policy.yaml` copied into the
+   target repository.
+4. Kanban/task-specific constraints and comments.
+5. Safe defaults.
+6. Operator clarification only for a genuinely non-delegable decision.
+
+The order supplies intent; it does not remove a declared safety boundary.
+Explicit user intent and standing delegation are interpreted within repository
+rules, project policy, protected paths, and forbidden mutations.
+
+Within explicit standing delegation and project policy, the orchestrator
+chooses and executes the simplest adequate, policy-compliant option. It prefers
+reversible actions where practical but does not choose a smaller change at the
+expense of a correct result. A missing routine preference is not a reason to
+stop or ask.
+
+If a safety-critical value is unspecified, hold only the affected action and
+send one central clarification. Continue independent work. This narrow safety
+hold is not a routine preference escalation.
+
+`decision_authority.mode: delegated` lets the orchestrator execute decisions in
+`delegated_scope`; `approval_required` makes that scope planning-only until the
+operator approves the proposed action. The orchestrator still owns the plan,
+recommendation, and next gate. Non-delegable decisions and unspecified
+safety-critical values require clarification in either mode.
 
 ## What belongs in project policy
 
