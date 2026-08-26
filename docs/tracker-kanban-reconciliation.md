@@ -14,8 +14,9 @@ implementation.
 - **Hermes Kanban:** owns claims, worktrees, branches, retries, review handoffs,
   execution evidence, and terminal state.
 - **Supervised Hermes gateway:** is the sole dispatcher.
-- **Orchestrator:** owns decomposition, tracker writes, adjudication,
-  continuations, and human decisions.
+- **Orchestrator:** is the operating and architecture authority within project
+  policy. It owns decomposition, tracker writes through the declared adapter,
+  adjudication, continuations, recovery, and human decisions.
 
 The reconciler never calls `kanban dispatch`, launches a second gateway, or
 claims worker capacity.

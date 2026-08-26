@@ -144,11 +144,21 @@ Existing profiles need to load or install the skill explicitly. Newly cloned pro
 
 The workflow resolves policy in this order:
 
-1. explicit user instructions;
+1. explicit user instructions or standing delegation;
 2. repository `AGENTS.md`, `CLAUDE.md`, or equivalent project rules;
-3. board/task fields and the project policy file;
-4. the skill's safe defaults;
-5. otherwise stop and ask rather than guessing.
+3. the project policy file;
+4. Kanban/task-specific constraints;
+5. safe defaults;
+6. operator clarification for genuinely non-delegable decisions only.
+
+This precedence does not remove repository safety rules, project policy,
+protected paths, or forbidden mutations. Within delegated scope, the
+orchestrator chooses the simplest adequate policy-compliant option rather than
+asking for every routine technical preference.
+
+If a safety-critical value is unspecified, hold only the affected action and
+use the central clarification path; independent work continues. A routine
+missing preference is not a reason to stop.
 
 Use [`examples/project-policy.yaml`](examples/project-policy.yaml) as a starting point. See [`docs/policy-resolution.md`](docs/policy-resolution.md) for how to adapt it.
 
@@ -164,7 +174,9 @@ orchestrator  →  implementer  →  code-reviewer  →  completion-verifier  �
 
 Recommended reusable profile roles:
 
-- `orchestrator` — decomposes, routes, manages WIP, and owns tracker writes; no code writes;
+- `orchestrator` — operating and architecture authority for decomposition,
+  architecture, ownership, sequencing, remediation, recovery, routing, WIP,
+  adjudication, and tracker writes; no source-code writes;
 - `implementer` — TDD-first code changes in isolated worktrees;
 - `code-reviewer` — independent read-only review from a fresh typed packet;
 - `completion-verifier` — checks review coverage, acceptance evidence, and board transitions;
@@ -173,7 +185,14 @@ Recommended reusable profile roles:
 
 In `project-policy.yaml`, role keys use snake_case (`qa_ui`, `release_operator`) while profile names may use hyphens. The mapping is intentional: policy keys are stable schema names; profile values are user-selected identities.
 
-The Hermes gateway dispatcher handles mechanical Kanban lifecycle work: promotion, claims, worktrees, heartbeats, retries, and recovery. An orchestrator profile handles reasoning about decomposition, model strength, WIP, and human decisions.
+The orchestrator drives routine technical and operational decisions between
+desired outcomes and worker execution. The Hermes gateway dispatcher handles
+mechanical Kanban lifecycle work: promotion, claims, worktrees, heartbeats,
+retries, and reclaim. The orchestrator chooses the next safe phase; workers
+execute bounded implementation, review, verification, and release tasks.
+
+See [`docs/profile-roles.md`](docs/profile-roles.md#orchestrator) for the
+authority, guardrails, and decision ladder.
 
 Use task-level model overrides for strength tiers where possible. Create another profile when behavior, tools, credentials, or memory isolation differ, not merely because a task needs a stronger model.
 

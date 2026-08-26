@@ -39,6 +39,26 @@ Do not use a digest alone as the source of truth. Do not use this skill to bypas
 7. **Worker claims are untrusted.** Verify from task runs, task events, PIDs, heartbeats, diffs, tests, and the exact board state.
 8. **Capacity is part of correctness.** A backend that accepts one probe but overloads under fan-out is not a healthy factory route. Bound per-profile concurrency to observed capacity.
 
+## Orchestrator authority and decision ladder
+
+The orchestrator is the default operating and architecture authority between
+desired outcomes and worker execution. It chooses and drives the technical or
+operational path, including routine architecture, sequencing, remediation,
+recovery, routing, WIP, and the next safe phase. It does not ask the operator
+because a routine preference is missing.
+
+Use the shared decision ladder in `docs/profile-roles.md` for every selected
+issue or locked lane: bind canonical identity and current execution state;
+diagnose the observed cause or uncertainty; choose the next phase; assign
+ownership, dependencies, acceptance, and fallback; act; read back the exact
+mutation; preserve the prior decision while newer work is in flight; and report
+the decision separately from liveness.
+
+Guardrails constrain the action, not the orchestrator's decision ownership:
+preserve useful work, do not bypass independent review or deployment policy,
+do not take destructive or irreversible action without rollback or approval,
+and do not start a second dispatcher.
+
 ## Add-on recovery layer
 
 Keep factory recovery outside Hermes core. The repository's
@@ -240,14 +260,20 @@ The core procedure above remains self-contained for direct `SKILL.md` installati
 
 ## Reporting Shape
 
-Use direct sections, not a vague success paragraph:
+Use direct decision-oriented sections, not a vague success paragraph:
 
-- **Live state:** exact counts and board slug;
-- **Factory health:** dispatcher owner, review gate, active worker evidence;
-- **Changes made:** exact config/task transitions, each read back;
-- **Verified progress:** task IDs, run/events, independent verdicts;
-- **Unresolved blockers:** task IDs, failure class, next condition for retry;
-- **Decision:** continue automatically, queue behind capacity, recover a worker, or stop for human input.
+- **Decision:** what the orchestrator chose;
+- **Durable action:** what changed and was read back;
+- **Progress:** independently verified result;
+- **Not progressing:** work not advancing;
+- **Why:** the current cause;
+- **Boundary:** internal or external;
+- **Owner:** responsible role or lane;
+- **Evidence:** exact board, run, diff, test, or artifact evidence;
+- **Next gate:** the next condition for progress.
+
+Keep exact counts, board slug, dispatcher health, and worker state as supporting
+context. Separate the last completed decision from a newer decision in flight.
 
 Never say "handled" when the state is only mentioned, queued, or running. Use `fixed`, `verified`, and `closed` only when their evidence criteria are satisfied.
 

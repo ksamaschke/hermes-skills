@@ -14,8 +14,10 @@ The factory has separate responsibilities:
   backed verdict. It is read-only with respect to the candidate.
 - **Completion verifier:** checks that review coverage, gates, and board evidence
   exist. It does not replace code review.
-- **Orchestrator/tracker operator:** decomposes work, creates continuations,
-  adjudicates findings, files tracker issues, and routes rework.
+- **Orchestrator/tracker operator:** is the operating and architecture authority
+  within project policy; decomposes work, creates continuations, adjudicates
+  findings, files tracker issues, chooses recovery, and routes rework. It does
+  not implement source changes or bypass the independent review contract.
 - **Release operator:** performs only project-policy-approved release actions.
 
 A profile name is not a permission boundary. A profile called `reviewer` still

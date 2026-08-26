@@ -63,13 +63,23 @@ Requires: `git`, `hermes`, and the project-declared tracker adapter.
 
 Profiles represent reusable roles, permissions, and model routing rather than repositories:
 
-- `orchestrator` — Kanban-only decomposition, routing, WIP, and human decisions;
+- `orchestrator` — operating and architecture authority for decomposition,
+  architecture, ownership, sequencing, remediation, recovery, routing, WIP,
+  adjudication, and the next safe phase;
 - `implementer` — TDD-first writes in isolated worktrees;
 - `code-reviewer` — independent read-only review using a different model/vendor family;
 - optional `qa-ui` — native/browser verification for UI-only acceptance;
 - optional `release-operator` — project-policy-controlled release or GitOps work.
 
-Use task-level model overrides for strength tiers when behavior and permissions are unchanged. Create a separate profile when tools, credentials, memory, safety policy, or write permissions differ. The gateway dispatcher handles mechanical lifecycle work; the orchestrator profile handles reasoning about what should run next.
+Use task-level model overrides for strength tiers when behavior and permissions are unchanged. Create a separate profile when tools, credentials, memory, safety policy, or write permissions differ. The gateway dispatcher handles mechanical lifecycle work; the orchestrator drives the technical and operational decisions about what should run next.
+
+Use the shared decision ladder in `docs/profile-roles.md` for every selected
+issue or locked lane. Bind canonical identity and current execution state,
+diagnose the observed cause or uncertainty, choose the next phase, assign
+ownership/dependencies/acceptance/fallback, perform the durable action, read it
+back, preserve the prior decision while newer work is in flight, and report the
+decision separately from liveness. Routine missing preferences are not reasons
+to stop; project policy's non-delegable boundaries are.
 
 ## Quick reference
 
@@ -293,7 +303,7 @@ Completion criterion: rollout evidence matches the declared project policy, not 
 
 ### 8. Monitor and report
 
-The gateway dispatcher mechanically promotes, claims, spawns, heartbeats, reclaims, retries, and caps work. The orchestrator/HEX handles adaptive routing, WIP, reviewer assignment, and human decisions. Factory-specific mechanical repairs belong in the external add-on `scripts/kanban_factory_recovery.py`, not Hermes core: pin legacy cron snapshots, repair duplicate clean managed worktrees, verify readback, and leave dirty/product/review/human blockers untouched.
+The gateway dispatcher mechanically promotes, claims, spawns, heartbeats, reclaims, retries, and caps work. The orchestrator/HEX drives adaptive routing, architecture, WIP, reviewer assignment, remediation, recovery, and human decisions. Factory-specific mechanical repairs belong in the external add-on `scripts/kanban_factory_recovery.py`, not Hermes core: pin legacy cron snapshots, repair duplicate clean managed worktrees, verify readback, and leave dirty/product/review/human blockers untouched.
 
 Use `terminal` to inspect:
 
@@ -308,7 +318,10 @@ hermes kanban --board <board> log <id>
 
 For recurring human updates, create a continuity-enabled cron digest and deliver it to a configured gateway home channel. A local CLI/Desktop chat may not accept scheduled delivery.
 
-Every report distinguishes board state, worker handoff, independently verified tests/diff, and deployment evidence.
+Every report leads with Decision, Durable action, Progress, Not progressing,
+Why, Boundary, Owner, Evidence, and Next gate. Counts and liveness remain
+supporting context. Distinguish the last completed decision from a newer
+decision currently in flight.
 
 ## Factory health and recovery
 

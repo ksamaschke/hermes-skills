@@ -40,8 +40,10 @@ Keep these responsibilities distinct:
 - **Code reviewer:** independently inspects and exercises the candidate, read-only.
 - **Completion verifier:** checks that required review coverage and board evidence
   exist; it does not replace the code review.
-- **Orchestrator/tracker operator:** decomposes work, creates continuations,
-  adjudicates findings, files tracker issues, and routes rework.
+- **Orchestrator/tracker operator:** is the operating and architecture authority
+  within project policy; decomposes work, creates continuations, adjudicates
+  findings, files tracker issues, chooses recovery, and routes rework. It does
+  not implement source changes or bypass the independent review contract.
 - **Release operator:** performs only the project-policy-approved release or
   deployment action.
 

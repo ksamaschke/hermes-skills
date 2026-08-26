@@ -4,12 +4,40 @@
 
 Kanban workers and individual task cards do not contact Matrix or any other
 human channel directly. They write task state, runs, comments, and events to
-the board. One central dispatcher/orchestrator path reads that state and HEX
-reports the aggregate result through the configured progress digest.
+the board. Workers and task cards do not contact the user directly. One central
+orchestrator/reporting path reads that state and HEX reports the aggregate
+result through the configured progress digest. The gateway dispatcher remains
+the mechanical lifecycle owner; it is not the decision-making bridge.
 
 Task-level `kanban_notify_subs` rows are not part of this policy and should stay
 empty. Do not use `notify-subscribe` as a substitute for dispatcher
 observability.
+
+## Operator clarification bridge
+
+Workers and task cards write state and evidence only. They never ask the user
+directly. When a decision crosses a policy-declared non-delegable boundary, the
+central orchestrator emits one deduplicated clarification packet containing:
+
+- source item;
+- pull request or change request, when applicable;
+- Kanban task;
+- owner;
+- one concrete question;
+- recommended default;
+- materially different alternatives;
+- exact non-delegable reason;
+- impact of waiting;
+- current evidence;
+- next gate;
+- response format.
+
+An operator response is a transport handoff only. The transport layer never
+changes code, ownership, status, dependencies, or deployment state. The next
+orchestrator cycle verifies the response, records the resulting decision, and
+then performs the allowed mutation. Unanswered requests are not repeated
+unless evidence materially changes. Independent work continues while only the
+dependent lane is held.
 
 ## Runtime configuration
 
@@ -46,6 +74,22 @@ machine-specific full config files.
 The central factory progress digest is the human-facing reporting path. Each
 run reads the live board and dispatcher evidence, applies the human-impact filter
 below, and then reports:
+
+Lead every digest with these sections:
+
+- **Decision**;
+- **Durable action**;
+- **Progress**;
+- **Not progressing**;
+- **Why**;
+- **Boundary:** internal or external;
+- **Owner**;
+- **Evidence**;
+- **Next gate**.
+
+Keep counts as supporting context. Distinguish the last completed decision from
+a newer decision currently in flight, and distinguish both from queued/running
+Kanban state, durable tracker/Git state, and independently verified progress.
 
 - board counts and completed work since the previous digest;
 - running, review, ready, and todo work;
