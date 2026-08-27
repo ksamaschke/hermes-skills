@@ -27,6 +27,15 @@ providers:
   aliases:
     local_qwen: <local-provider-alias>
     external: <external-provider-alias>
+  auth:
+    local_qwen:
+      mode: subscription
+      credential_store: <subscription-credential-store>
+    external:
+      mode: api_key
+      secret:
+        name: <provider-secret-name>
+        key: <provider-secret-key>
 
 models:
   aliases:

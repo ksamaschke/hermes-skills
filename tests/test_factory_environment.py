@@ -55,6 +55,19 @@ def test_example_contains_only_generic_contract_sections():
     }
 
 
+def test_example_declares_provider_auth_modes_without_credentials():
+    document = _example()
+    auth = document["providers"]["auth"]
+
+    assert set(auth) == {"local_qwen", "external"}
+    assert auth["local_qwen"]["mode"] == "subscription"
+    assert set(auth["local_qwen"]) == {"mode", "credential_store"}
+    assert auth["local_qwen"]["credential_store"]
+    assert auth["external"]["mode"] == "api_key"
+    assert set(auth["external"]) == {"mode", "secret"}
+    assert set(auth["external"]["secret"]) == {"name", "key"}
+
+
 def test_example_declares_optional_brain_and_reference_only_secrets():
     document = _example()
 
@@ -71,6 +84,59 @@ def test_example_declares_optional_brain_and_reference_only_secrets():
 
 def test_example_passes_deterministic_validator():
     assert validator.validate(_example()) == []
+
+
+def test_validator_accepts_api_key_and_subscription_for_each_provider():
+    for provider in ("local_qwen", "external"):
+        for mode in ("api_key", "subscription"):
+            document = _example()
+            if mode == "api_key":
+                document["providers"]["auth"][provider] = {
+                    "mode": mode,
+                    "secret": {"name": "provider-secret", "key": "api-key"},
+                }
+            else:
+                document["providers"]["auth"][provider] = {
+                    "mode": mode,
+                    "credential_store": "profile-credential-store",
+                }
+
+            assert validator.validate(document) == []
+
+
+def test_validator_rejects_unsupported_auth_mode():
+    document = _example()
+    document["providers"]["auth"]["external"]["mode"] = "oauth"
+
+    errors = validator.validate(document)
+
+    assert errors == [
+        "providers.auth.external.mode must be one of: api_key, subscription"
+    ]
+
+
+def test_validator_rejects_api_key_without_secret_reference():
+    document = _example()
+    del document["providers"]["auth"]["external"]["secret"]
+
+    errors = validator.validate(document)
+
+    assert "providers.auth.external.secret must be a name/key reference" in errors
+
+
+def test_validator_rejects_inline_auth_secret_values():
+    document = _example()
+    document["providers"]["auth"]["external"]["secret"]["value"] = (
+        "must-not-be-committed"
+    )
+
+    errors = validator.validate(document)
+
+    assert any(
+        "providers.auth.external.secret" in error and "name/key" in error
+        for error in errors
+    )
+    assert any("inline secret" in error for error in errors)
 
 
 def test_validator_rejects_unsupported_environment_kind():
