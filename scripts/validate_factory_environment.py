@@ -31,6 +31,10 @@ REQUIRED_FIELDS = (
     "profiles.code_reviewer",
     "providers.aliases.local_qwen",
     "providers.aliases.external",
+    "providers.auth.local_qwen",
+    "providers.auth.local_qwen.mode",
+    "providers.auth.external",
+    "providers.auth.external.mode",
     "models.aliases.orchestrator",
     "models.aliases.implementer",
     "models.aliases.code_reviewer",
@@ -44,6 +48,7 @@ REQUIRED_FIELDS = (
     "secrets.model",
 )
 _ALLOWED_ENVIRONMENT_KINDS = {"homelab", "external"}
+_ALLOWED_AUTH_MODES = {"api_key", "subscription"}
 
 _SECRET_VALUE_KEYS = {
     "access_token",
@@ -102,6 +107,19 @@ def _find_inline_secret_values(value: Any, path: str = "") -> list[str]:
     return errors
 
 
+def _validate_name_key_reference(value: Any, path: str) -> list[str]:
+    if not isinstance(value, Mapping):
+        return [f"{path} must be a name/key reference"]
+    if set(value) != {"name", "key"}:
+        return [f"{path} must contain only name/key"]
+
+    errors: list[str] = []
+    for component in ("name", "key"):
+        if not _is_non_empty_string(value[component]):
+            errors.append(f"{path}.{component} must be a non-empty reference")
+    return errors
+
+
 def _validate_secret_references(document: Mapping[str, Any]) -> list[str]:
     errors: list[str] = []
     secrets = _value_at(document, "secrets")
@@ -127,6 +145,53 @@ def _validate_secret_references(document: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def _validate_provider_auth(document: Mapping[str, Any]) -> list[str]:
+    errors: list[str] = []
+    auth = _value_at(document, "providers.auth")
+    if auth is _MISSING or auth is None:
+        return errors
+    if not isinstance(auth, Mapping):
+        return ["providers.auth must be a mapping"]
+
+    for provider in ("local_qwen", "external"):
+        path = f"providers.auth.{provider}"
+        config = auth.get(provider, _MISSING)
+        if config is _MISSING or config is None or not isinstance(config, Mapping):
+            continue
+
+        mode = config.get("mode", _MISSING)
+        if mode is _MISSING or mode is None:
+            continue
+        if not _is_non_empty_string(mode) or mode not in _ALLOWED_AUTH_MODES:
+            allowed = ", ".join(sorted(_ALLOWED_AUTH_MODES))
+            errors.append(f"{path}.mode must be one of: {allowed}")
+            continue
+
+        if mode == "api_key":
+            secret = config.get("secret", _MISSING)
+            if secret is _MISSING or secret is None:
+                errors.append(f"{path}.secret must be a name/key reference")
+            else:
+                errors.extend(_validate_name_key_reference(secret, f"{path}.secret"))
+        elif mode == "subscription":
+            credential_store = config.get("credential_store", _MISSING)
+            if credential_store is _MISSING or credential_store is None:
+                errors.append(
+                    f"{path}.credential_store must be a non-empty credential-store reference"
+                )
+            elif isinstance(credential_store, Mapping):
+                errors.extend(
+                    _validate_name_key_reference(
+                        credential_store, f"{path}.credential_store"
+                    )
+                )
+            elif not _is_non_empty_string(credential_store):
+                errors.append(
+                    f"{path}.credential_store must be a non-empty credential-store reference"
+                )
+    return errors
+
+
 def validate(document: Any) -> list[str]:
     """Return deterministic validation errors for a factory environment document."""
 
@@ -149,6 +214,12 @@ def validate(document: Any) -> list[str]:
             elif value not in _ALLOWED_ENVIRONMENT_KINDS:
                 allowed = ", ".join(sorted(_ALLOWED_ENVIRONMENT_KINDS))
                 errors.append(f"{path} must be one of: {allowed}")
+        elif path in {
+            "providers.auth.local_qwen",
+            "providers.auth.external",
+        }:
+            if not isinstance(value, Mapping):
+                errors.append(f"field must be a mapping: {path}")
         elif path.startswith("secrets."):
             continue
         elif not _is_non_empty_string(value):
@@ -170,6 +241,7 @@ def validate(document: Any) -> list[str]:
         if value is not _MISSING and value != expected:
             errors.append(f"{path} must be {expected!r}")
 
+    errors.extend(_validate_provider_auth(document))
     errors.extend(_validate_secret_references(document))
     errors.extend(_find_inline_secret_values(document))
     return sorted(set(errors))

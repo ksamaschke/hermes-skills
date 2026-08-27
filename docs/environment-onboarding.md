@@ -18,7 +18,32 @@ The overlay declares only the values that differ between factory instances:
   `code_reviewer` role;
 - `providers.aliases` and `models.aliases`: names resolved by the target
   environment, rather than hard-coded provider endpoints or model IDs;
+- `providers.auth`: the non-secret authentication mode and reference for each
+  logical provider alias;
 - `secrets`: references containing only a secret resource `name` and `key`.
+
+### Provider authentication
+
+Each `providers.auth` entry identifies an authentication `mode`. The supported
+modes are `api_key` and `subscription`:
+
+- With `api_key`, create the key in the target environment's secret store and
+  reference it with `secret.name` and `secret.key`. The reference identifies a
+  secret resource; it never contains the key itself.
+- With `subscription`, authenticate through the target
+  profile/environment's supported login or credential store. The
+  `credential_store` value is only a non-secret resource or handle naming that
+  store; it does not contain a token, password, or session material.
+
+Raw keys and tokens never enter Git or the factory task body. The same rule
+applies to tracker, model, and provider credentials: provision them out of band
+and commit only non-secret resource references.
+
+Provider and model aliases remain declarative. In a homelab, the target
+configuration resolves `local_qwen` to its local Qwen-backed route. In an
+external environment, it resolves `external` to that environment's external
+provider. The shared contract does not choose or embed either concrete
+endpoint.
 
 The `brain` section is deliberately optional. If Fritz Brain already exists,
 the factory detects and reuses it. Installation is never automatic. If it is
@@ -27,9 +52,10 @@ The provider mapping uses the `local_qwen` alias for a homelab and the
 `external` alias for other environments; the aliases are resolved outside this
 public template.
 
-The validator checks structure, required fields, the Brain safety policy, and
-secret-reference shape. It reads only the supplied YAML file. It does not
-contact a cluster, tracker, model provider, or Brain service.
+The validator checks structure, required fields, provider authentication modes
+and references, the Brain safety policy, and secret-reference shape. It reads
+only the supplied YAML file. It does not contact a cluster, tracker, model
+provider, or Brain service.
 
 ## Short flow
 
@@ -41,8 +67,11 @@ contact a cluster, tracker, model provider, or Brain service.
 
 2. Fill in the environment kind, GitOps and factory repositories, tracker
    coordinates, role-to-profile mapping, and local model/provider aliases.
-3. Provision the referenced secrets out of band. Put only their resource names
-   and keys in the overlay, never token, password, or key material.
+3. For `api_key` providers, create the key in the target secret store and put
+   only its resource `name` and `key` in the overlay. For `subscription`
+   providers, configure the supported target-profile login or credential-store
+   reference. Never copy token or key material into the overlay, Git, or a
+   factory task body.
 4. Validate and render with the project-declared tools:
 
    ```bash
