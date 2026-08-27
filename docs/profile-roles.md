@@ -98,14 +98,51 @@ A same-family or unknown-family review is `REVIEW-INCOMPLETE` until an independe
 final review exists. `PRELIMINARY` may describe the evidence qualifier but is
 not a terminal verdict. See [`docs/reviewer-role-contract.md`](reviewer-role-contract.md).
 
-## Completion verifier and tracker operator
+## Completion verifier
 
-A completion verifier checks review coverage, acceptance evidence, and board transitions; it does not replace the code reviewer. An orchestrator/tracker operator creates continuations, adjudicates findings, files source-tracker issues, and routes rework. These actions are separate from the review leaf.
+A completion verifier checks review coverage, acceptance evidence, and board
+transitions; it does not replace the code reviewer and it does not merge or
+release the candidate. Its terminal handoff is evidence for the next lifecycle
+stage, not delivery completion.
+
+## Integration operator
+
+The `integration_operator` is a separate, project-policy-controlled role. It
+consumes a verified implementation and independent review, then owns the
+source-control boundary:
+
+- creates or locates the pull request in the declared source repository;
+- verifies base branch, head branch/commit, title/body, and changed files;
+- obtains the required host review and CI results;
+- merges only when policy allows it, then reads back the merged commit;
+- records the external PR/merge handles and the next release gate.
+
+A Kanban `APPROVED` verdict is not a pull-request review, and a pushed branch is
+not a merge. If this owner or its external repository capability is missing,
+integration remains incomplete.
+
+## Tracker/orchestrator operator
+
+The orchestrator/tracker operator creates continuations, adjudicates findings,
+files source-tracker issues, routes rework, and creates the integration and
+release handoffs. It does not implement source changes, perform the independent
+review, or infer downstream completion from a worker summary.
 
 ## QA/UI
 
-A `qa-ui` profile is optional. Use it for native/browser acceptance that cannot be proven by headless tests. It should not rebuild or launch a desktop shell for every unit test. Keep full-app smoke cards separate and time-boxed.
+A `qa-ui` profile is optional. Use it for native/browser acceptance that cannot
+be proven by headless tests. It should not rebuild or launch a desktop shell for
+every unit test. Keep full-app smoke cards separate and time-boxed.
 
 ## Release/GitOps
 
-A `release-operator` profile is optional and project-policy-controlled. It may prepare release artifacts or GitOps changes. It must not bypass the project's declared deployment controller or mutate production directly when policy forbids that.
+A `release_operator` profile is separate from integration and is
+project-policy-controlled. It consumes a read-back merged commit, prepares the
+approved release artifact or GitOps change, and verifies publication and
+post-action controller/data-plane state. It must not bypass the project's
+declared deployment controller or mutate production directly when policy
+forbids that. If deployment mode is `unspecified`, it records the policy hold
+instead of claiming deployment complete.
+
+See [`docs/factory-delivery-lifecycle.md`](factory-delivery-lifecycle.md) for
+the complete state and evidence contract.

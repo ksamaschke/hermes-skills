@@ -38,6 +38,10 @@ Do not use a digest alone as the source of truth. Do not use this skill to bypas
 6. **Infrastructure recovery is narrow.** Requeue a card after fixing a dispatcher/backend problem only when its failure is attributable to that problem. Preserve genuine product timeouts, missing evidence, dependency gates, and human decisions.
 7. **Worker claims are untrusted.** Verify from task runs, task events, PIDs, heartbeats, diffs, tests, and the exact board state.
 8. **Capacity is part of correctness.** A backend that accepts one probe but overloads under fan-out is not a healthy factory route. Bound per-profile concurrency to observed capacity.
+9. **Delivery is staged.** Implementation completion and an independent `APPROVED`
+   review do not imply integration, pull-request review, merge, or deployment.
+   Create and dispatch the policy-selected integration and release handoffs, then
+   read back each external result before calling the source work delivered.
 
 ## Orchestrator authority and decision ladder
 

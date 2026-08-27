@@ -52,6 +52,7 @@ Resolve these before creating ready work:
 - UI-smoke command, if applicable;
 - deployment mode and rollout owner;
 - implementer and independent reviewer profiles;
+- completion verifier, integration operator, and release operator profiles;
 - WIP and concurrency limits.
 - dispatcher owner, effective runtime policy, and the supported reload path.
 
@@ -68,8 +69,10 @@ Profiles represent reusable roles, permissions, and model routing rather than re
   adjudication, and the next safe phase;
 - `implementer` — TDD-first writes in isolated worktrees;
 - `code-reviewer` — independent read-only review using a different model/vendor family;
+- `completion-verifier` — checks review coverage, acceptance evidence, and board transitions;
+- `integration-operator` — creates/verifies the source pull request, host review, CI, and policy-controlled merge;
 - optional `qa-ui` — native/browser verification for UI-only acceptance;
-- optional `release-operator` — project-policy-controlled release or GitOps work.
+- `release-operator` — consumes the merged revision for project-policy-controlled release or GitOps/deployment work.
 
 Use task-level model overrides for strength tiers when behavior and permissions are unchanged. Create a separate profile when tools, credentials, memory, safety policy, or write permissions differ. The gateway dispatcher handles mechanical lifecycle work; the orchestrator drives the technical and operational decisions about what should run next.
 
@@ -283,7 +286,22 @@ human decision; a reviewer does not emit it as a leaf verdict.
 
 Completion criterion: no code card is accepted as final solely from its implementer’s report.
 
-### 7. Apply the project deployment policy
+### 7. Integrate through source control
+
+After completion verification and an `APPROVED` independent review, create and
+assign a separate integration task to the configured `integration-operator`.
+The integration operator must create or verify the pull request in the declared
+source repository, read back its base branch, head revision, title/body, and
+changed files, then obtain the required host review and CI results. It merges
+only under project policy and reads back the merged commit. A pushed branch,
+worker summary, or Kanban review verdict is not a merge.
+
+Completion criterion: the external PR handle, required host-review/CI evidence,
+merge decision, and merged revision are durable and read back. If the
+integration owner, repository capability, PR, host review, CI, or merge policy
+is missing, keep integration incomplete and do not close the source work.
+
+### 8. Apply the project deployment policy
 
 Resolve deployment mode from project instructions or policy config.
 
@@ -301,7 +319,7 @@ Do not run direct `kubectl apply`, Helm mutation, or ad-hoc production rollout w
 
 Completion criterion: rollout evidence matches the declared project policy, not a generic assumption.
 
-### 8. Monitor and report
+### 9. Monitor and report
 
 The gateway dispatcher mechanically promotes, claims, spawns, heartbeats, reclaims, retries, and caps work. The orchestrator/HEX drives adaptive routing, architecture, WIP, reviewer assignment, remediation, recovery, and human decisions. Factory-specific mechanical repairs belong in the external add-on `scripts/kanban_factory_recovery.py`, not Hermes core: pin legacy cron snapshots, repair duplicate clean managed worktrees, verify readback, and leave dirty/product/review/human blockers untouched.
 

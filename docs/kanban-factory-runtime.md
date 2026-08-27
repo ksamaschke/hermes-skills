@@ -47,8 +47,9 @@ Profiles represent reusable roles, not repositories:
 - `implementer`: TDD-first changes in an isolated worktree;
 - `code-reviewer`: independent, read-only review from a fresh packet;
 - `completion-verifier`: review coverage and board evidence, not code review;
+- `integration-operator`: source pull request, host review, CI, and policy-controlled merge;
 - optional `qa-ui`: native/browser evidence;
-- optional `release-operator`: policy-controlled release or GitOps work.
+- `release-operator`: consumes the merged revision for policy-controlled release or GitOps/deployment work.
 
 A profile name does not establish these permissions. The project overlay maps
 logical roles to exact existing profile names and verifies them before dispatch.
@@ -89,6 +90,18 @@ Do not reuse an implementation card with a new assignee. Reviewers do not
 implement fixes, file tracker issues, create Kanban children, deploy, or mutate
 live infrastructure. Those actions belong to the orchestrator or a separate
 implementer/release task. See `docs/reviewer-role-contract.md`.
+
+## Delivery handoff
+
+A completed implementation and an `APPROVED` review are not integrated or
+released. The orchestrator creates a separate integration task for the
+`integration-operator` after completion verification. That task creates or
+verifies the pull request, reads back base/head and changed files, waits for
+host review and CI, performs a policy-controlled merge, and reads back the
+merged revision. A separate `release-operator` then handles approved artifact
+or GitOps publication and post-action verification. Missing owners or external
+handles are lifecycle gaps, not successful completion. See
+`docs/factory-delivery-lifecycle.md`.
 
 ## Source reconciliation
 

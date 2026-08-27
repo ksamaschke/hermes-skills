@@ -18,6 +18,7 @@ profiles:
   implementer: implementer
   code_reviewer: reviewer # concrete profile name may remain reviewer
   completion_verifier: null # optional concrete profile name
+  integration_operator: null # creates/verifies PRs and performs policy-controlled merges
   code_reviewer_model_default: null # e.g. provider/strong-model-id
   code_reviewer_model_routine: null # e.g. provider/routine-model-id
   implementer_vendor_family: null # null = unknown; review remains REVIEW-INCOMPLETE until independent
@@ -94,6 +95,25 @@ safety:
   secrets_policy: key_env # key_env | vault | none-required
   forbidden_mutations: []
 
+delivery:
+  # These are lifecycle requirements, not permission grants. Replace null
+  # profiles and provider details in a project-specific policy before use.
+  integration:
+    required: true
+    pull_request_required: true
+    host_review_required: true
+    merge_requires:
+      - independent_review
+      - required_ci
+      - host_review
+    merged_commit_readback_required: true
+  release:
+    required: true
+    deployment_requires_policy: true
+    post_action_verification_required: true
+
+# A project may stop after a verified merge only when that policy decision is
+# explicit. `unspecified` never means "deploy automatically".
 deployment:
   mode: unspecified # gitops_only | direct_allowed | release_only | unspecified
   # direct_cluster_mutation is a hard override; forbidden wins over any mode.

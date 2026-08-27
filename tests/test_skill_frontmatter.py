@@ -28,6 +28,7 @@ PUBLIC_TEXT_FILES = [
     ROOT / "docs" / "orchestrator-soul-template.md",
     ROOT / "docs" / "tracker-adapters.md",
     ROOT / "docs" / "reviewer-reliability.md",
+    ROOT / "docs" / "factory-delivery-lifecycle.md",
     ROOT / "docs" / "reviewer-role-contract.md",
     ROOT / "docs" / "profile-environment-contract.md",
     ROOT / "docs" / "tracker-kanban-reconciliation.md",
@@ -94,6 +95,7 @@ def test_policy_parses_and_declares_roles_safety_and_deployment():
         "implementer",
         "code_reviewer",
         "completion_verifier",
+        "integration_operator",
         "qa_ui",
         "release_operator",
     }

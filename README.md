@@ -127,16 +127,34 @@ Once installed, load the set explicitly for a session:
 hermes --skills kanban-implementation-workflow,kanban-factory-operations,kanban-progress-evidence,kanban-reviewer-contract,tracker-kanban-reconciliation,software-factory-recovery
 ```
 
-The deterministic recovery add-on is installed separately from the skill
+The deterministic recovery add-ons are installed separately from the skill
 documents:
 
 ```bash
 install -m 755 scripts/kanban_factory_recovery.py ~/.hermes/scripts/kanban_factory_recovery.py
+install -m 755 scripts/kanban_review_successor_recovery.py ~/.hermes/scripts/kanban_review_successor_recovery.py
+install -m 755 scripts/kanban_review_successor_recovery_cron.py ~/.hermes/scripts/kanban_review_successor_recovery_cron.py
 ```
 
-Schedule it as a silent `no_agent` cron job every few minutes. It must remain
-outside Hermes core and only repair the mechanical cases documented by the
-recovery skill.
+The recovery add-on validates the durable packet before dispatch, keeps authored
+acceptance questions verbatim, creates at most eight lossless two-file successor
+leaves, and preserves an incomplete packet when that bound cannot cover the
+whole scope. Successor creation is read back and rolled back to archived state
+if any card in the batch fails validation; failed create responses are
+rediscovered by exact idempotency key before cleanup. Dry-run performs only
+read-only inspection and planning.
+
+Run the review add-on in dry-run mode before scheduling it:
+
+```bash
+python3 scripts/kanban_review_successor_recovery.py \
+  --board <project-board> --dry-run
+```
+
+The project wrapper is suitable for a silent `no_agent` cron job. Set
+`HERMES_FACTORY_BOARD` explicitly; it runs the tracked sibling implementation
+with `--apply --quiet`. The wrapper remains outside Hermes core and never
+creates a second dispatcher.
 
 Existing profiles need to load or install the skill explicitly. Newly cloned profiles inherit the skill set available at clone time.
 
@@ -167,10 +185,15 @@ Use [`examples/project-policy.yaml`](examples/project-policy.yaml) as a starting
 Profiles represent **roles, permissions, and model routing**, not repositories:
 
 ```text
-orchestrator  →  implementer  →  code-reviewer  →  completion-verifier  →  release
-     │              │                  │                    │
-  kanban/tracker  write worktree   read-only packet     evidence/board
+orchestrator  →  implementer  →  code-reviewer  →  completion-verifier
+                                                    ↓
+                           integration-operator  →  release-operator
+                           PR/host review/merge      artifact/deployment
 ```
+
+Implementation, independent review, integration, and deployment are separate
+states. A worktree or Kanban verdict never implies a pull-request review, merge,
+or rollout.
 
 Recommended reusable profile roles:
 
@@ -180,10 +203,11 @@ Recommended reusable profile roles:
 - `implementer` — TDD-first code changes in isolated worktrees;
 - `code-reviewer` — independent read-only review from a fresh typed packet;
 - `completion-verifier` — checks review coverage, acceptance evidence, and board transitions;
+- `integration-operator` — creates/verifies the source pull request, host review, CI, and policy-controlled merge;
 - `qa-ui` — optional native/browser verification lane for UI-only acceptance;
-- `release-operator` — optional project-policy-controlled release/GitOps lane.
+- `release-operator` — consumes the merged revision for project-policy-controlled release/GitOps/deployment work.
 
-In `project-policy.yaml`, role keys use snake_case (`qa_ui`, `release_operator`) while profile names may use hyphens. The mapping is intentional: policy keys are stable schema names; profile values are user-selected identities.
+In `project-policy.yaml`, role keys use snake_case (`qa_ui`, `integration_operator`, `release_operator`) while profile names may use hyphens. The mapping is intentional: policy keys are stable schema names; profile values are user-selected identities.
 
 The orchestrator drives routine technical and operational decisions between
 desired outcomes and worker execution. The Hermes gateway dispatcher handles
@@ -214,6 +238,9 @@ Deployment is always project policy, never a hidden default. A project policy de
 
 The example policy demonstrates one GitOps/Argo arrangement without baking any user's infrastructure paths, rooms, tokens, or repository names into the reusable skill.
 
+The required distinction between implementation, review, integration, merge, and
+deployment is documented in [`docs/factory-delivery-lifecycle.md`](docs/factory-delivery-lifecycle.md).
+
 ## Monitoring
 
 Typical board commands:
@@ -231,6 +258,7 @@ Check factory control-plane health separately:
 ```bash
 hermes gateway status
 ~/.hermes/scripts/kanban_factory_recovery.py --board <board> --dry-run
+HERMES_FACTORY_BOARD=<board> ~/.hermes/scripts/kanban_review_successor_recovery_cron.py
 ```
 
 For recurring updates, use a continuity-enabled cron digest and deliver it to a configured gateway home channel. A local CLI/Desktop chat may not have a live cron delivery target.
@@ -248,6 +276,8 @@ skills/kanban-progress-evidence/SKILL.md        evidence and closure accounting
 skills/kanban-progress-evidence/references/     closure matrix template
 skills/software-factory-recovery/SKILL.md      autonomous recovery procedure
 scripts/kanban_factory_recovery.py              deterministic recovery add-on
+scripts/kanban_review_successor_recovery.py     review packet guard and recursive successor bridge
+scripts/kanban_review_successor_recovery_cron.py installed no-agent wrapper
 examples/project-policy.yaml                    adaptable tracker policy template
 docs/profile-roles.md                            reusable profile role model
 docs/reviewer-role-contract.md                   project-agnostic reviewer boundary
@@ -255,6 +285,7 @@ docs/profile-environment-contract.md             profile/worktree environment pr
 docs/tracker-kanban-reconciliation.md            project-agnostic source adapter contract
 docs/policy-resolution.md                        project-specific adaptation guide
 docs/reviewer-reliability.md                     bounded review and failure recovery
+docs/factory-delivery-lifecycle.md               implementation-to-deployment state contract
 docs/tracker-adapters.md                         multi-provider tracker adapter guidance
 tests/test_skill_frontmatter.py                 lightweight package validation
 ```
