@@ -1,9 +1,10 @@
 # Generic environment overlay for one Hermes Software Factory instance.
-# Replace angle-bracket placeholders with local, non-secret values.
+# Replace angle-bracket placeholders with local, non-secret values and choose
+# the environment kind for the target deployment.
 version: 1
 
 environment:
-  kind: <homelab-or-external> # homelab | external
+  kind: homelab # homelab | external
 
 gitops:
   controller: <gitops-controller>

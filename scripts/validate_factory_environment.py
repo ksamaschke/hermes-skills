@@ -43,6 +43,7 @@ REQUIRED_FIELDS = (
     "secrets.tracker",
     "secrets.model",
 )
+_ALLOWED_ENVIRONMENT_KINDS = {"homelab", "external"}
 
 _SECRET_VALUE_KEYS = {
     "access_token",
@@ -142,6 +143,12 @@ def validate(document: Any) -> list[str]:
                 errors.append("version must be a positive integer")
         elif path == "brain.optional":
             continue
+        elif path == "environment.kind":
+            if not _is_non_empty_string(value):
+                errors.append(f"field must be a non-empty string: {path}")
+            elif value not in _ALLOWED_ENVIRONMENT_KINDS:
+                allowed = ", ".join(sorted(_ALLOWED_ENVIRONMENT_KINDS))
+                errors.append(f"{path} must be one of: {allowed}")
         elif path.startswith("secrets."):
             continue
         elif not _is_non_empty_string(value):

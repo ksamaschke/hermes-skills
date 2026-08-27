@@ -73,6 +73,15 @@ def test_example_passes_deterministic_validator():
     assert validator.validate(_example()) == []
 
 
+def test_validator_rejects_unsupported_environment_kind():
+    document = _example()
+    document["environment"]["kind"] = "production"
+
+    errors = validator.validate(document)
+
+    assert errors == ["environment.kind must be one of: external, homelab"]
+
+
 def test_validator_reports_missing_required_fields():
     document = _example()
     del document["tracker"]["board"]
