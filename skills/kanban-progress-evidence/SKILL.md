@@ -36,7 +36,10 @@ Separate these states:
 - **verified** — an independent check exercised the result with evidence;
 - **closed** — the acceptance gate is satisfied and the board state reflects it.
 
-A worker saying “done” is not proof of fixed, verified, or closed.
+A worker saying “done” is not proof of fixed, verified, or closed. A verified
+implementation/review is not integration or deployment; closure additionally
+requires the policy-selected pull-request, merge, release, and post-action
+readbacks.
 
 ## Decision authority and ladder
 
