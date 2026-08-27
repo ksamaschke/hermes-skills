@@ -17,6 +17,7 @@ service.  It does not retry a timed-out prompt unchanged.
 from __future__ import annotations
 
 import argparse
+import copy
 from contextlib import contextmanager
 from functools import lru_cache
 import json
@@ -946,22 +947,48 @@ def successor_frontier(
     rows: Iterable[dict[str, Any]],
     failure_runs: Optional[dict[str, Any]] = None,
     _seen: Optional[set[str]] = None,
+    failure_run_loader: Optional[Callable[[str], Any]] = None,
 ) -> list[str]:
     """Return the active/current frontier after recursively following successors."""
     rows_list = list(rows)
     by_id = {str(row.get("id")): row for row in rows_list if row.get("id")}
+    known_failure_runs = failure_runs if failure_runs is not None else {}
     seen = set(_seen or set())
     if task_id in seen:
         return []
     seen.add(task_id)
-    run_id = (failure_runs or {}).get(task_id)
+    run_known = task_id in known_failure_runs
+    run_id = known_failure_runs.get(task_id)
+    if run_id is not None and not str(run_id).strip():
+        run_id = None
     successors = _successor_rows(rows_list, task_id, run_id)
+    if run_id is None and not run_known and failure_run_loader is not None and successors:
+        # A terminal frontier leaf needs no run lookup.  Only read back a
+        # descendant's latest timeout when there are children to disambiguate.
+        run_id = failure_run_loader(task_id)
+        if run_id is not None and not str(run_id).strip():
+            run_id = None
+        known_failure_runs[task_id] = run_id
+        successors = _successor_rows(rows_list, task_id, run_id) if run_id is not None else []
     if successors:
+        # A successor is valid only for the exact failure run that generated
+        # its parent.  Never let a missing descendant readback turn into an
+        # unrestricted match that can admit a stale/superseded branch.
+        if run_id is None:
+            return []
         frontier: list[str] = []
         for successor in successors:
             successor_id = str(successor.get("id") or "")
             if successor_id:
-                frontier.extend(successor_frontier(successor_id, rows_list, failure_runs, seen))
+                frontier.extend(
+                    successor_frontier(
+                        successor_id,
+                        rows_list,
+                        known_failure_runs,
+                        _seen=seen,
+                        failure_run_loader=failure_run_loader,
+                    )
+                )
         return list(dict.fromkeys(frontier))
 
     row = by_id.get(task_id)
@@ -981,6 +1008,7 @@ def replacement_fanin_parents(
     fanin: dict[str, Any],
     rows: Iterable[dict[str, Any]],
     failure_runs: Optional[dict[str, Any]] = None,
+    failure_run_loader: Optional[Callable[[str], Any]] = None,
 ) -> Optional[list[str]]:
     """Replace blocked ancestors with the recursively resolved successor frontier."""
     leaf_ids = _clean_id_list(_field(str(fanin.get("body") or ""), "leaf_tasks"))
@@ -989,7 +1017,12 @@ def replacement_fanin_parents(
     parents: list[str] = []
     changed = False
     for leaf_id in leaf_ids:
-        frontier = successor_frontier(leaf_id, rows, failure_runs)
+        frontier = successor_frontier(
+            leaf_id,
+            rows,
+            failure_runs,
+            failure_run_loader=failure_run_loader,
+        )
         if not frontier:
             return None
         if set(frontier) != {leaf_id}:
@@ -1189,6 +1222,75 @@ def _create_successor(
         raise
 
 
+def _field_present(body: str, name: str) -> bool:
+    escaped = re.escape(name).replace(r"\ ", r"[ _]")
+    return re.search(rf"(?im)^\s*{escaped}\s*:", body) is not None
+
+
+def _fanin_provenance_errors(
+    fanin: dict[str, Any],
+    task: dict[str, Any],
+    parent_ids: list[str],
+    key: str,
+) -> list[str]:
+    """Validate the replacement body against its source handoff."""
+    body = str(task.get("body") or "")
+    source_body = str(fanin.get("body") or "")
+    expected = {
+        "review_type": "bounded fan-in",
+        "replaces_fan_in": _clean(fanin.get("id")),
+        "review_successor_idempotency_key": key,
+        "implementation_task": _first_field(source_body, "implementation_task", "implementation task"),
+        "source_issue": _first_field(source_body, "source_issue", "source issue"),
+        "target_worktree": _clean(fanin.get("workspace_path")),
+        "read_only_source": "true",
+        "max_runtime_seconds": "900",
+        "max_retries": "1",
+        "allowed_verdicts": "APPROVED, CHANGES_REQUESTED, REVIEW-INCOMPLETE",
+        "stop_condition": "fan-in only; do not repeat leaf review or repository-wide discovery",
+    }
+    errors: list[str] = []
+    required_nonempty = {
+        "review_type",
+        "replaces_fan_in",
+        "review_successor_idempotency_key",
+        "implementation_task",
+        "target_worktree",
+        "read_only_source",
+        "max_runtime_seconds",
+        "max_retries",
+        "allowed_verdicts",
+        "stop_condition",
+    }
+    for field, expected_value in expected.items():
+        if not _field_present(body, field):
+            errors.append(f"missing {field}")
+            continue
+        actual_value = _field(body, field)
+        if field in required_nonempty and not expected_value:
+            errors.append(f"source {field} is missing")
+            continue
+        if field == "read_only_source":
+            matches = _bool_value(actual_value) is True
+        elif field in {"max_runtime_seconds", "max_retries"}:
+            matches = _int_value(actual_value) == int(expected_value)
+        else:
+            matches = actual_value == expected_value
+        if not matches:
+            errors.append(f"{field} does not match the source handoff")
+
+    actual_parent_ids = _clean_id_list(_field(body, "leaf_tasks"))
+    if not _field_present(body, "leaf_tasks"):
+        errors.append("missing leaf_tasks")
+    elif (
+        len(actual_parent_ids) != len(parent_ids)
+        or len(set(actual_parent_ids)) != len(actual_parent_ids)
+        or set(actual_parent_ids) != set(parent_ids)
+    ):
+        errors.append("leaf_tasks does not match the exact frontier parent set")
+    return errors
+
+
 def _create_fanin(board: str, fanin: dict[str, Any], parent_ids: list[str], key: str) -> str:
     body = fanin_body(fanin, parent_ids, key=key)
     task_id: Optional[str] = None
@@ -1203,13 +1305,24 @@ def _create_fanin(board: str, fanin: dict[str, Any], parent_ids: list[str], key:
         if str(task.get("status") or "") not in {"todo", "ready", "running"}:
             raise RuntimeError(f"replacement fan-in {task_id} status readback failed")
         actual = [str(parent) for parent in detail.get("parents") or []]
-        if actual != parent_ids and set(actual) != set(parent_ids):
+        if len(actual) != len(parent_ids) or set(actual) != set(parent_ids):
             raise RuntimeError(f"replacement fan-in {task_id} dependency readback failed")
         if (
             _int_value(durable_task.get("max_runtime_seconds")) != 900
             or _int_value(durable_task.get("max_retries")) != 1
         ):
             raise RuntimeError(f"replacement fan-in {task_id} durable budget readback failed")
+        expected_assignee = str(fanin.get("assignee") or "default")
+        if str(task.get("assignee") or "") != expected_assignee:
+            raise RuntimeError(f"replacement fan-in {task_id} assignee readback failed")
+        if str(task.get("workspace_path") or "") != _clean(fanin.get("workspace_path")):
+            raise RuntimeError(f"replacement fan-in {task_id} workspace readback failed")
+        provenance_errors = _fanin_provenance_errors(fanin, task, parent_ids, key)
+        if provenance_errors:
+            raise RuntimeError(
+                f"replacement fan-in {task_id} provenance readback failed: "
+                + "; ".join(provenance_errors)
+            )
         return task_id
     except Exception as exc:
         cleanup_ids: list[str] = []
@@ -1259,11 +1372,18 @@ def _existing_key(rows: Iterable[dict[str, Any]], key: str) -> Optional[dict[str
     )
 
 
-def _recover_review_leaves(board: str, rows: list[dict[str, Any]], *, apply: bool, changes: list[str]) -> None:
+def _recover_review_leaves(
+    board: str,
+    rows: list[dict[str, Any]],
+    *,
+    apply: bool,
+    changes: list[str],
+) -> list[dict[str, Any]]:
+    working_rows = rows if apply else copy.deepcopy(rows)
     profile_preflighted: set[str] = set()
     # The queue includes pre-existing blocked chains.  New successors are ready,
     # not failed, so they are intentionally not recursively retried in this pass.
-    for row in list(rows):
+    for row in list(working_rows):
         if str(row.get("status") or "") != "blocked" or not is_review_leaf(row):
             continue
         task_id = str(row.get("id") or "")
@@ -1306,7 +1426,7 @@ def _recover_review_leaves(board: str, rows: list[dict[str, Any]], *, apply: boo
         try:
             for spec in specs:
                 key = successor_key(task_id, failure.get("id"), spec)
-                existing = _existing_key(rows, key)
+                existing = _existing_key(working_rows, key)
                 if existing is not None:
                     if str(existing.get("status") or "") in FRONTIER_STATUSES:
                         created_ids.append(str(existing.get("id")))
@@ -1318,7 +1438,7 @@ def _recover_review_leaves(board: str, rows: list[dict[str, Any]], *, apply: boo
                     planned_id = f"planned-{_slug(key)}"
                     planned_body = successor_body(packet, failure, spec, original_task_id=task_id)
                     planned_body += f"\nreview_successor_idempotency_key: {key}\n"
-                    rows.append({
+                    working_rows.append({
                         "id": planned_id,
                         "status": "ready",
                         "body": planned_body,
@@ -1328,7 +1448,7 @@ def _recover_review_leaves(board: str, rows: list[dict[str, Any]], *, apply: boo
                     changes.append(f"would create review successor for {task_id}: {key}")
                     continue
                 successor_id = _create_successor(board, packet, failure, spec, key)
-                rows.append({
+                working_rows.append({
                     "id": successor_id,
                     "status": "ready",
                     "assignee": packet["reviewer_profile"],
@@ -1349,7 +1469,9 @@ def _recover_review_leaves(board: str, rows: list[dict[str, Any]], *, apply: boo
                 except Exception as cleanup_exc:
                     rollback_errors.append(f"{created_id}: {cleanup_exc}")
             created_set = {created_id for created_id, _key in newly_created}
-            rows[:] = [row for row in rows if str(row.get("id") or "") not in created_set]
+            working_rows[:] = [
+                row for row in working_rows if str(row.get("id") or "") not in created_set
+            ]
             detail = f"{task_id}: successor batch rolled back: {exc}"
             if rollback_errors:
                 detail += "; cleanup failures: " + "; ".join(rollback_errors)
@@ -1370,10 +1492,18 @@ def _recover_review_leaves(board: str, rows: list[dict[str, Any]], *, apply: boo
             )
             for successor_id, key in newly_created:
                 changes.append(f"created and verified review successor {successor_id} for {task_id}: {key}")
+    return working_rows
 
 
-def _recover_fanins(board: str, rows: list[dict[str, Any]], *, apply: bool, changes: list[str]) -> None:
-    for row in list(rows):
+def _recover_fanins(
+    board: str,
+    rows: list[dict[str, Any]],
+    *,
+    apply: bool,
+    changes: list[str],
+) -> list[dict[str, Any]]:
+    working_rows = rows if apply else copy.deepcopy(rows)
+    for row in list(working_rows):
         if str(row.get("status") or "") != "todo" or not is_review_fanin(row):
             continue
         fanin_id = str(row.get("id") or "")
@@ -1384,16 +1514,37 @@ def _recover_fanins(board: str, rows: list[dict[str, Any]], *, apply: bool, chan
         for leaf_id in leaf_ids:
             leaf_detail = _show(board, leaf_id)
             failure = latest_timeout(leaf_detail)
-            if failure is not None:
-                failure_runs[leaf_id] = failure.get("id")
-        parent_ids = replacement_fanin_parents(fanin, rows, failure_runs)
+            failure_id = failure.get("id") if failure is not None else None
+            if failure_id is not None and not str(failure_id).strip():
+                failure_id = None
+            failure_runs[leaf_id] = failure_id
+
+        def load_failure_run(task_id: str) -> Any:
+            try:
+                detail = _show(board, task_id)
+            except Exception:
+                return None
+            failure = latest_timeout(detail)
+            if failure is None:
+                return None
+            failure_id = failure.get("id")
+            if failure_id is not None and not str(failure_id).strip():
+                return None
+            return failure_id
+
+        parent_ids = replacement_fanin_parents(
+            fanin,
+            working_rows,
+            failure_runs,
+            failure_run_loader=load_failure_run,
+        )
         if not parent_ids:
             continue
         key = fanin_key(fanin_id, parent_ids)
         existing = next(
             (
                 candidate
-                for candidate in rows
+                for candidate in working_rows
                 if _field(str(candidate.get("body") or ""), "replaces_fan_in") == fanin_id
                 and _field(str(candidate.get("body") or ""), "review_successor_idempotency_key") == key
             ),
@@ -1413,7 +1564,7 @@ def _recover_fanins(board: str, rows: list[dict[str, Any]], *, apply: bool, chan
             continue
         else:
             replacement_id = _create_fanin(board, fanin, parent_ids, key)
-            rows.append({
+            working_rows.append({
                 "id": replacement_id,
                 "status": "todo",
                 "body": fanin_body(fanin, parent_ids, key=key),
@@ -1422,6 +1573,7 @@ def _recover_fanins(board: str, rows: list[dict[str, Any]], *, apply: bool, chan
             changes.append(f"created and verified replacement fan-in {replacement_id} for {fanin_id}")
         if apply:
             _settle_old_fanin(board, fanin_id, replacement_id)
+    return working_rows
 
 
 def recover(board: str, *, apply: bool = False, run_guard: bool = True) -> list[str]:
@@ -1431,10 +1583,10 @@ def recover(board: str, *, apply: bool = False, run_guard: bool = True) -> list[
         changes.extend(guard(board, rows, apply=apply))
         if apply:
             rows = _list(board)
-    _recover_review_leaves(board, rows, apply=apply, changes=changes)
+    rows = _recover_review_leaves(board, rows, apply=apply, changes=changes)
     if apply:
         rows = _list(board)
-    _recover_fanins(board, rows, apply=apply, changes=changes)
+    rows = _recover_fanins(board, rows, apply=apply, changes=changes)
     return changes
 
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import sqlite3
 from pathlib import Path
@@ -496,7 +497,144 @@ def test_fan_in_follows_the_recursive_successor_frontier():
         {"id": "t_done", "status": "done", "body": ""},
     ]
 
-    assert recovery.replacement_fanin_parents(fanin, rows, {"t_old": 1}) == ["t_current", "t_done"]
+    assert recovery.replacement_fanin_parents(
+        fanin,
+        rows,
+        {"t_old": 1, "t_first": 2},
+    ) == ["t_current", "t_done"]
+
+
+def test_recover_fanins_loads_each_descendant_failure_run_and_excludes_stale_siblings(monkeypatch):
+    fanin = {
+        "id": "t_fanin",
+        "title": "Review synthesis",
+        "status": "todo",
+        "body": "review_type: bounded fan-in\nleaf_tasks: t_old\n",
+    }
+    old = {
+        "id": "t_old",
+        "status": "blocked",
+        "body": "review_type: read-only adversarial code review leaf\n",
+    }
+    first = {
+        "id": "t_first",
+        "status": "blocked",
+        "body": (
+            "review_type: read-only adversarial code review leaf\n"
+            "continuation_of: t_old\n"
+            "failure_run: 1\n"
+        ),
+    }
+    current = {
+        "id": "t_current",
+        "status": "ready",
+        "body": (
+            "review_type: read-only adversarial code review leaf\n"
+            "continuation_of: t_first\n"
+            "failure_run: 2\n"
+        ),
+    }
+    stale = {
+        "id": "t_stale",
+        "status": "ready",
+        "body": (
+            "review_type: read-only adversarial code review leaf\n"
+            "continuation_of: t_first\n"
+            "failure_run: 1\n"
+        ),
+    }
+    rows = [fanin, old, first, current, stale]
+    details = {
+        "t_fanin": {"task": fanin},
+        "t_old": {
+            "task": old,
+            "runs": [{"id": 1, "status": "timed_out", "outcome": "timed_out"}],
+        },
+        "t_first": {
+            "task": first,
+            "runs": [{"id": 2, "status": "timed_out", "outcome": "timed_out"}],
+        },
+    }
+    shown = []
+    monkeypatch.setattr(
+        recovery,
+        "_show",
+        lambda board, task_id: shown.append(task_id) or details[task_id],
+    )
+
+    changes = []
+    recovery._recover_fanins("board", rows, apply=False, changes=changes)
+
+    assert "t_first" in shown
+    assert changes == [
+        "would create replacement fan-in for t_fanin with parents: t_current"
+    ]
+
+
+def test_dry_run_leaf_planning_does_not_mutate_input_rows(tmp_path, monkeypatch):
+    task = {
+        **BROAD_TASK,
+        "status": "blocked",
+        "workspace_path": str(tmp_path),
+        "body": BROAD_TASK["body"].replace("/repo/.worktrees/t_impl", str(tmp_path)),
+        "metadata": {"nested": ["untouched"]},
+    }
+    detail = {
+        "task": task,
+        "runs": [{"id": 1, "status": "timed_out", "outcome": "timed_out"}],
+    }
+    monkeypatch.setattr(recovery, "_show", lambda board, task_id: detail)
+
+    rows = [task]
+    before = copy.deepcopy(rows)
+    recovery._recover_review_leaves("board", rows, apply=False, changes=[])
+
+    assert rows == before
+
+
+def test_dry_run_fanin_planning_does_not_mutate_input_rows(monkeypatch):
+    fanin = {
+        "id": "t_fanin",
+        "title": "Review synthesis",
+        "status": "todo",
+        "body": "review_type: bounded fan-in\nleaf_tasks: t_old\n",
+        "metadata": {"nested": {"untouched": True}},
+    }
+    old = {
+        "id": "t_old",
+        "status": "blocked",
+        "body": "review_type: read-only adversarial code review leaf\n",
+    }
+    successor = {
+        "id": "t_successor",
+        "status": "ready",
+        "body": (
+            "review_type: read-only adversarial code review leaf\n"
+            "continuation_of: t_old\n"
+            "failure_run: 1\n"
+        ),
+    }
+    rows = [fanin, old, successor]
+    before = copy.deepcopy(rows)
+    monkeypatch.setattr(
+        recovery,
+        "_show",
+        lambda board, task_id: {
+            "t_fanin": {"task": fanin},
+            "t_old": {
+                "task": old,
+                "runs": [{"id": 1, "status": "timed_out", "outcome": "timed_out"}],
+            },
+        }[task_id],
+    )
+
+    changes = []
+    recovery._recover_fanins("board", rows, apply=False, changes=changes)
+
+    assert rows == before
+    assert changes == [
+        "would create replacement fan-in for t_fanin with parents: t_successor"
+    ]
 
 
 def test_fan_in_creation_has_every_frontier_parent_in_the_create_call():
@@ -508,6 +646,95 @@ def test_fan_in_creation_has_every_frontier_parent_in_the_create_call():
     assert command[command.index("--parent", command.index("--parent") + 1) + 1] == "t_two"
     assert "--max-retries" in command
     assert command[command.index("--max-retries") + 1] == "1"
+
+
+def test_fanin_creation_accepts_complete_provenance_readback(monkeypatch):
+    fanin = {
+        "id": "t_fanin",
+        "title": "Review synthesis",
+        "assignee": "default",
+        "workspace_path": "/repo/.worktrees/t_impl",
+        "body": (
+            "review_type: bounded fan-in\n"
+            "implementation_task: t_impl\n"
+            "source_issue: https://forgejo.example/issues/42\n"
+        ),
+    }
+    parent_ids = ["t_one", "t_two"]
+    key = recovery.fanin_key(fanin["id"], parent_ids)
+    body = recovery.fanin_body(fanin, parent_ids, key=key)
+    archived = []
+    monkeypatch.setattr(recovery, "_json_command", lambda *args: {"id": "t_created"})
+    monkeypatch.setattr(
+        recovery,
+        "_show",
+        lambda board, task_id: {
+            "task": {
+                "id": task_id,
+                "status": "ready",
+                "assignee": "default",
+                "workspace_path": fanin["workspace_path"],
+                "body": body,
+            },
+            "parents": parent_ids,
+        },
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_enrich_task_with_durable_fields",
+        lambda board, task: {**task, "max_runtime_seconds": 900, "max_retries": 1},
+    )
+    monkeypatch.setattr(recovery, "_archive_created_task", lambda board, task_id: archived.append(task_id))
+
+    assert recovery._create_fanin("board", fanin, parent_ids, key) == "t_created"
+    assert archived == []
+
+
+def test_fanin_creation_rejects_incomplete_provenance_and_rolls_back(monkeypatch):
+    fanin = {
+        "id": "t_fanin",
+        "title": "Review synthesis",
+        "assignee": "default",
+        "workspace_path": "/repo/.worktrees/t_impl",
+        "body": "review_type: bounded fan-in\nimplementation_task: t_impl\n",
+    }
+    parent_ids = ["t_one", "t_two"]
+    key = recovery.fanin_key(fanin["id"], parent_ids)
+    body = recovery.fanin_body(fanin, parent_ids, key=key).replace(
+        f"leaf_tasks: {', '.join(parent_ids)}",
+        "leaf_tasks: t_one",
+    )
+    archived = []
+    monkeypatch.setattr(recovery, "_json_command", lambda *args: {"id": "t_created"})
+    monkeypatch.setattr(
+        recovery,
+        "_show",
+        lambda board, task_id: {
+            "task": {
+                "id": task_id,
+                "status": "ready",
+                "assignee": "default",
+                "workspace_path": fanin["workspace_path"],
+                "body": body,
+            },
+            "parents": parent_ids,
+        },
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_enrich_task_with_durable_fields",
+        lambda board, task: {**task, "max_runtime_seconds": 900, "max_retries": 1},
+    )
+    monkeypatch.setattr(recovery, "_archive_created_task", lambda board, task_id: archived.append(task_id))
+
+    try:
+        recovery._create_fanin("board", fanin, parent_ids, key)
+    except RuntimeError as exc:
+        assert "provenance readback failed" in str(exc)
+    else:
+        raise AssertionError("expected provenance readback failure")
+
+    assert archived == ["t_created"]
 
 
 def test_dry_run_does_not_settle_an_existing_replacement_fan_in(monkeypatch):
