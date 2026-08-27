@@ -1,0 +1,52 @@
+# Generic environment overlay for one Hermes Software Factory instance.
+# Replace angle-bracket placeholders with local, non-secret values and choose
+# the environment kind for the target deployment.
+version: 1
+
+environment:
+  kind: homelab # homelab | external
+
+gitops:
+  controller: <gitops-controller>
+  repository: <gitops-repository>
+
+factory:
+  repository: <factory-repository>
+
+tracker:
+  kind: <tracker-kind>
+  project: <tracker-project>
+  board: <kanban-board>
+
+profiles:
+  orchestrator: <orchestrator-profile>
+  implementer: <implementer-profile>
+  code_reviewer: <code-reviewer-profile>
+
+providers:
+  aliases:
+    local_qwen: <local-provider-alias>
+    external: <external-provider-alias>
+
+models:
+  aliases:
+    orchestrator: <orchestrator-model-alias>
+    implementer: <implementer-model-alias>
+    code_reviewer: <code-reviewer-model-alias>
+
+brain:
+  optional: true
+  existing: detect_and_reuse
+  missing: explicit_approval_required
+  installation: never_automatic
+  provider:
+    homelab: local_qwen
+    external: external
+
+secrets:
+  tracker:
+    name: <tracker-secret-name>
+    key: <tracker-secret-key>
+  model:
+    name: <model-secret-name>
+    key: <model-secret-key>
