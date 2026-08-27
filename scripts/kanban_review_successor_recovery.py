@@ -714,12 +714,28 @@ def review_verdict(detail: dict[str, Any]) -> str:
     CHANGES_REQUESTED.
     """
     latest = _latest_run(detail)
+    recognised_states = (
+        TIMEOUT_OUTCOMES
+        | {"crashed", "failed", "spawn_failed", "cancelled", "reclaimed", "blocked"}
+        | {"changes_requested", "done", "completed", "review_requested", "running", "ready"}
+    )
+    raw_states = {
+        str(latest.get(field) or "").strip().lower()
+        for field in ("status", "outcome")
+    } if latest else set()
+    if any(value and value not in recognised_states for value in raw_states):
+        return "REVIEW-INCOMPLETE"
     state = _run_state(latest)
     if state in INCOMPLETE_OUTCOMES:
         return "REVIEW-INCOMPLETE"
 
     if state in {"running", "ready", "review_requested"}:
         return ""
+
+    # A latest run with an unrecognised non-empty state is not evidence that an
+    # older comment is still authoritative.  Keep the review fail-closed.
+    if latest and state and state not in recognised_states:
+        return "REVIEW-INCOMPLETE"
 
     if latest and state in {"done", "completed", "changes_requested"}:
         metadata = _metadata(latest)
@@ -1175,21 +1191,46 @@ def _create_successor(
 
 def _create_fanin(board: str, fanin: dict[str, Any], parent_ids: list[str], key: str) -> str:
     body = fanin_body(fanin, parent_ids, key=key)
-    result = _json_command(*fanin_command(board, fanin, parent_ids, body, key))
-    task_id = _task_id(result)
-    if not task_id:
-        raise RuntimeError(f"replacement fan-in create returned no task id for {key}")
-    detail = _show(board, task_id)
-    task = _task_from_detail(detail, {})
-    durable_task = _enrich_task_with_durable_fields(board, task)
-    if str(task.get("status") or "") not in {"todo", "ready", "running"}:
-        raise RuntimeError(f"replacement fan-in {task_id} status readback failed")
-    actual = [str(parent) for parent in detail.get("parents") or []]
-    if actual != parent_ids and set(actual) != set(parent_ids):
-        raise RuntimeError(f"replacement fan-in {task_id} dependency readback failed")
-    if _int_value(durable_task.get("max_retries")) != 1:
-        raise RuntimeError(f"replacement fan-in {task_id} retry readback failed")
-    return task_id
+    task_id: Optional[str] = None
+    try:
+        result = _json_command(*fanin_command(board, fanin, parent_ids, body, key))
+        task_id = _task_id(result) or None
+        if not task_id:
+            raise RuntimeError(f"replacement fan-in create returned no task id for {key}")
+        detail = _show(board, task_id)
+        task = _task_from_detail(detail, {})
+        durable_task = _enrich_task_with_durable_fields(board, task)
+        if str(task.get("status") or "") not in {"todo", "ready", "running"}:
+            raise RuntimeError(f"replacement fan-in {task_id} status readback failed")
+        actual = [str(parent) for parent in detail.get("parents") or []]
+        if actual != parent_ids and set(actual) != set(parent_ids):
+            raise RuntimeError(f"replacement fan-in {task_id} dependency readback failed")
+        if (
+            _int_value(durable_task.get("max_runtime_seconds")) != 900
+            or _int_value(durable_task.get("max_retries")) != 1
+        ):
+            raise RuntimeError(f"replacement fan-in {task_id} durable budget readback failed")
+        return task_id
+    except Exception as exc:
+        cleanup_ids: list[str] = []
+        if task_id:
+            cleanup_ids.append(task_id)
+        else:
+            try:
+                existing = _existing_key(_list(board), key)
+            except Exception:
+                existing = None
+            if existing and existing.get("id"):
+                cleanup_ids.append(str(existing["id"]))
+        cleanup_errors: list[str] = []
+        for cleanup_id in dict.fromkeys(cleanup_ids):
+            try:
+                _archive_created_task(board, cleanup_id)
+            except Exception as cleanup_exc:
+                cleanup_errors.append(f"{cleanup_id}: {cleanup_exc}")
+        if cleanup_errors:
+            raise RuntimeError(f"{exc}; cleanup failures: {'; '.join(cleanup_errors)}") from exc
+        raise
 
 
 def _settle_old_fanin(board: str, fanin_id: str, replacement_id: str) -> None:

@@ -315,6 +315,26 @@ def test_active_newer_run_does_not_inherit_an_older_comment_verdict():
     assert recovery.review_verdict(detail) == ""
 
 
+def test_unknown_latest_run_state_fails_closed_instead_of_using_a_stale_comment():
+    detail = {
+        "task": VALID_TASK,
+        "runs": [{"id": 2, "status": "vendor_paused", "outcome": "vendor_paused"}],
+        "comments": [{"author": "reviewer", "body": "APPROVED: old run"}],
+    }
+
+    assert recovery.review_verdict(detail) == "REVIEW-INCOMPLETE"
+
+
+def test_unknown_latest_outcome_is_not_masked_by_a_known_status():
+    detail = {
+        "task": VALID_TASK,
+        "runs": [{"id": 2, "status": "done", "outcome": "new_provider_state"}],
+        "comments": [{"author": "reviewer", "body": "APPROVED: old run"}],
+    }
+
+    assert recovery.review_verdict(detail) == "REVIEW-INCOMPLETE"
+
+
 def test_reclaimed_or_blocked_terminal_runs_are_incomplete():
     for outcome in ("reclaimed", "blocked"):
         detail = {
@@ -660,6 +680,53 @@ def test_failed_create_rediscovers_and_archives_an_orphan_by_exact_key(monkeypat
         assert str(exc) == "timeout"
     else:
         raise AssertionError("expected create failure")
+
+    assert archived == ["t_orphan"]
+
+
+def test_fanin_creation_validates_both_durable_budget_fields_and_rolls_back(monkeypatch):
+    fanin = {"id": "t_fanin", "title": "Review synthesis", "assignee": "default", "workspace_path": "/repo/.worktrees/t_impl", "body": "review_type: bounded fan-in"}
+    archived = []
+    monkeypatch.setattr(recovery, "_json_command", lambda *args: {"id": "t_created"})
+    monkeypatch.setattr(
+        recovery,
+        "_show",
+        lambda board, task_id: {"task": {"id": task_id, "status": "ready"}, "parents": ["t_one"]},
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_enrich_task_with_durable_fields",
+        lambda board, task: {**task, "max_runtime_seconds": 600, "max_retries": 1},
+    )
+    monkeypatch.setattr(recovery, "_archive_created_task", lambda board, task_id: archived.append(task_id))
+
+    try:
+        recovery._create_fanin("board", fanin, ["t_one"], "fanin-key")
+    except RuntimeError as exc:
+        assert "durable budget readback failed" in str(exc)
+    else:
+        raise AssertionError("expected durable budget failure")
+
+    assert archived == ["t_created"]
+
+
+def test_fanin_create_without_id_rediscovers_exact_key_and_preserves_error(monkeypatch):
+    fanin = {"id": "t_fanin", "title": "Review synthesis", "assignee": "default", "workspace_path": "/repo/.worktrees/t_impl", "body": "review_type: bounded fan-in"}
+    archived = []
+    monkeypatch.setattr(recovery, "_json_command", lambda *args: {})
+    monkeypatch.setattr(
+        recovery,
+        "_list",
+        lambda board: [{"id": "t_orphan", "body": "review_successor_idempotency_key: fanin-key\n"}],
+    )
+    monkeypatch.setattr(recovery, "_archive_created_task", lambda board, task_id: archived.append(task_id))
+
+    try:
+        recovery._create_fanin("board", fanin, ["t_one"], "fanin-key")
+    except RuntimeError as exc:
+        assert str(exc) == "replacement fan-in create returned no task id for fanin-key"
+    else:
+        raise AssertionError("expected missing id failure")
 
     assert archived == ["t_orphan"]
 
