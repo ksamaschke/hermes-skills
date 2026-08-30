@@ -50,7 +50,7 @@ are separate orchestrator work.
 
 Use these minimum budgets when the execution backend exposes a timeout:
 
-- focused file/config review: 600 seconds;
+- focused file/config review: 900 seconds;
 - repository plus live-resource audit: 900 seconds;
 - stateful infrastructure or cross-system review: 1,200 seconds;
 - multi-phase forensic review: 1,800 seconds or split into separate phases.
@@ -62,11 +62,16 @@ is sufficient.
 
 ### Adversarial code-review override
 
-For adversarial **code** reviews, use a maximum `max_runtime_seconds=600` per
-Kanban card, even when a broader audit would normally receive a 900- or
-1,200-second budget. Split the review before dispatch into focused slices such
-as transport/security, frontend parity, and packaging/lifecycle. Each slice
-must name its files, questions, focused tests, non-goals, and stop condition.
+Adversarial **code** reviews are change-scoped and use a two-tier budget rather
+than a single wall clock: a dispatcher hard cap (reference 1800s) as a
+SIGTERM/SIGKILL backstop, an evidence budget (reference 900s) at which the
+reviewer must itself return a verdict with recorded gaps, and a per-command
+timeout (reference 120s). A review killed at the dispatch cap is a factory
+fault, never a stop condition. Reviewers run diff-targeted checks only and never
+run the full project gate. Split the review before dispatch into focused slices
+such as transport/security, frontend parity, and packaging/lifecycle. Each slice
+must name its change manifest, question, focused tests, non-goals, and stop
+condition. See the factory's `docs/change-scoped-review.md`.
 
 Create each Kanban leaf with `max_retries=1`. A timeout is incomplete evidence,
 not a reason for the dispatcher to respawn the same prompt. Recovery owns the
@@ -93,7 +98,7 @@ Build a review manifest before dispatch. Split first by acceptance question or
 control-flow path, then split any remaining chunk that crosses two runtime
 layers, names more than five primary production files, or asks for more than
 one independent verdict. A leaf chunk has one question, a small directly
-referenced file/test set, focused checks, and a 600-second cap.
+referenced file/test set, focused checks, and the declared evidence budget.
 
 When leaf chunks finish, use a bounded fan-in task to reconcile their reports
 and map them to the acceptance criteria. The fan-in task must not repeat a
@@ -155,7 +160,8 @@ gap explicitly and do not summarize an absent result as "no issue found."
 
 ## Pitfalls
 
-- A 600-second default is not enough for a broad live infrastructure audit.
+- A single-tier timeout is not enough for a broad live infrastructure audit,
+  and for code review it produces kills instead of verdicts.
 - A worker that reads a full repository often spends its budget on irrelevant
   files and returns without the decisive resource evidence.
 - Parallel workers must not share a mutable checkout unless the task is strictly

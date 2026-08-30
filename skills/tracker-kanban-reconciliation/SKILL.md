@@ -174,8 +174,9 @@ For each new actionable item:
 - include TDD, validation, review, and deployment boundaries from project policy.
 
 Do not put implementation instructions on a reviewer task. Review handoffs use
-`kanban-reviewer-contract` and receive a fresh review packet with exact scope,
-candidate commit, read-only boundary, `max_runtime_seconds: 600`, and
+`kanban-reviewer-contract` and receive a fresh review packet with a change
+manifest, the review kind (`pre_commit` or `pre_merge`), candidate commit,
+read-only boundary, the declared two-tier runtime budget, and
 `max_retries: 1`.
 
 ## Reconciliation rules

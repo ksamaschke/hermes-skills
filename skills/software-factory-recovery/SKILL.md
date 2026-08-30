@@ -37,11 +37,19 @@ dispatcher carry out only the permitted mechanical action. Preserve useful work;
 do not bypass review or policy, start a second dispatcher, or take destructive
 or irreversible action without rollback or approval.
 
-Review workers have an additional contract: adversarial code review is split
-into focused read-only slices capped at 600 seconds. A timed-out slice is
-`REVIEW-INCOMPLETE`, not a finding and not a human blocker. Preserve the run,
-make the next slice narrower, and continue automatically until every required
-review question has a verdict or a genuine external/human limitation exists.
+Review workers have an additional contract: adversarial code review is
+change-scoped (`pre_commit` or `pre_merge`) and split into focused read-only
+slices under a two-tier budget - a dispatcher hard cap plus a reviewer evidence
+budget at which a verdict must be returned. A timed-out slice is
+`REVIEW-INCOMPLETE`, not a finding and not a human blocker.
+
+Preserve the run and classify the cause before choosing a remedy. Provider
+backoff, a forbidden full-gate command, or an invalid packet is a budget or
+execution-boundary fault: fix the packet or route and re-dispatch the same
+slice rather than narrowing it. Narrow only for genuine change-set size, and
+continue automatically until every required review question has a verdict or a
+genuine external/human limitation exists. A continuation chain that keeps
+timing out at shrinking scope is a factory fault, not a scope problem.
 
 Review decomposition is hierarchical. Split by acceptance question or
 control-flow path, then split again when a chunk crosses two runtime layers,

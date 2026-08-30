@@ -236,9 +236,11 @@ Treat macOS TCC permission dialogs as a human-only capability boundary.
 Create a fresh review task from a typed packet; do not reuse the implementation
 card body with a new assignee. Use `kanban-reviewer-contract` and assign a
 profile from a different vendor family when possible. The packet names the
-candidate commit, exact file paths, one review lens, focused commands,
-`read_only_source=true`, `max_runtime_seconds=600`, `max_retries=1`, and a stop
-condition. The reviewer reads the original acceptance criteria, diff, tests,
+candidate commit, the review kind (`pre_commit` or `pre_merge`), a change
+manifest of changed paths with hunk ranges, one review lens, diff-targeted
+commands, cited implementer/CI gate evidence, `read_only_source=true`, the
+declared runtime budgets (dispatch hard cap, evidence budget, per-command
+timeout), `max_retries=1`, and a stop condition. The reviewer reads the original acceptance criteria, diff, tests,
 error paths, security boundaries, and deployment constraints. It reruns
 relevant checks where possible and reports file/line evidence.
 
@@ -247,8 +249,10 @@ children, reassign work, or deploy. The orchestrator owns findings adjudication,
 source-tracker writes, continuations, and rework routing. A review protocol that
 needs code is an implementation task, not reviewer work.
 
-Create adversarial reviews as focused slices before dispatch. Each slice must
-use `max_runtime_seconds=600` and an explicit stop condition; do not put a full
+Create adversarial reviews as change-scoped slices before dispatch. Each slice
+must carry the declared two-tier budget and an explicit stop condition, and must
+run diff-targeted checks only - the full project gate is the implementer's/CI's
+evidence and is cited, never re-run inside a review. Do not put a full
 repository scan, baseline reproduction, native E2E, and security review in one
 card. Split at least the transport/bootstrap/security, frontend parity, and
 packaging/lifecycle concerns when they are all in scope. Require a heartbeat at

@@ -32,7 +32,7 @@ Do not use a digest alone as the source of truth. Do not use this skill to bypas
 
 1. **The live board is authoritative.** A digest is a historical observation. Current JSON, task details, runs, events, diagnostics, and process state decide what is happening now.
 2. **The factory is more than a queue.** A task is not handled until its implementation, independent review, verification evidence, and board transition are all accounted for. A source issue is not execution state until the reconciliation contract has matched it.
-3. **Review is a separate role contract.** A reviewer receives a fresh packet with exact file scope, candidate commit, read-only source boundary, one lens, a 600-second adversarial leaf cap, and one retry. Never reuse an implementation card, ask a reviewer to file tracker issues, or let a reviewer implement the review protocol. A timeout, crash, wrong target, or mutation is `REVIEW-INCOMPLETE`, never approval.
+3. **Review is a separate role contract.** A reviewer receives a fresh packet with a change manifest (never a whole-file, module, or repository scope), the review kind `pre_commit` or `pre_merge`, candidate commit, read-only source boundary, one lens, the declared two-tier review budget, and one retry. Reviewers run diff-targeted checks only and cite the implementer/CI gate rather than re-running it. Never reuse an implementation card, ask a reviewer to file tracker issues, or let a reviewer implement the review protocol. A timeout, crash, wrong target, or mutation is `REVIEW-INCOMPLETE`, never approval.
 4. **One dispatcher owner.** If dispatch is embedded in a supervised gateway, that gateway is the owner. Never launch a second long-lived gateway or standalone dispatcher against the same board database.
 5. **Review is a first-class lane.** A review handoff is not completion. A review task assigned to a real reviewer can be automatically dispatched only when the review-dispatch gate and reviewer profile are enabled.
 6. **Infrastructure recovery is narrow.** Requeue a card after fixing a dispatcher/backend problem only when its failure is attributable to that problem. Preserve genuine product timeouts, missing evidence, dependency gates, and human decisions.
@@ -83,7 +83,7 @@ modify Hermes source for these repairs.
 
 Adversarial code reviews are dispatched as focused, fresh review cards, not as
 implementation cards with a new assignee. Each slice uses
-`max_runtime_seconds=600`, `max_retries=1`, names the exact files and one review
+`max_runtime_seconds` set to the declared dispatch hard cap, `max_retries=1`, names the change manifest and one review
 lens, runs only focused checks, declares `read_only_source=true`, heartbeats at
 phase boundaries, and stops discovery at roughly 70% of its budget. Reviewers
 may not implement fixes, file source-tracker issues, create Kanban children, or
@@ -301,7 +301,7 @@ Never say "handled" when the state is only mentioned, queued, or running. Use `f
 - [ ] Parent dependencies inspected for apparent todo stalls.
 - [ ] Single dispatcher owner and supervised service state confirmed.
 - [ ] Review-dispatch policy and profile existence checked.
-- [ ] Every dispatched review has a fresh exact-scope packet, read-only boundary, 600-second leaf cap, and one retry.
+- [ ] Every dispatched review has a fresh change-manifest packet, read-only boundary, the declared two-tier budget, and one retry.
 - [ ] Replacement backend route probed without exposing secrets.
 - [ ] Requeues limited to infrastructure-caused failures and read back.
 - [ ] Per-profile concurrency cap selected for actual backend capacity.

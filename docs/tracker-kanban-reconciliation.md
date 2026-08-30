@@ -139,7 +139,7 @@ duplicate source IDs, source errors, board errors, and dry-run mode.
 
 A source item becoming review work receives a fresh review card governed by
 `kanban-reviewer-contract`. The packet has exact scope, candidate commit,
-read-only source boundary, one lens, a 600-second adversarial leaf cap, one
+read-only source boundary, one lens, the declared two-tier review budget, one
 retry, and a structured verdict. Reviewer tasks never contain implementation or
 tracker-issue filing instructions.
 

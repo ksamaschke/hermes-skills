@@ -90,7 +90,7 @@ One generic implementer profile can serve multiple boards. Create separate imple
 
 The code reviewer is separate from the implementer and should use an independent model/vendor family. It receives a fresh typed review packet, not an implementation card with a new assignee.
 
-The packet names the candidate commit, exact file paths, one acceptance question/lens, focused checks, explicit non-goals, `read_only_source: true`, `max_runtime_seconds: 600`, `max_retries: 1`, and a stop condition. The reviewer may read and test the candidate and write scratch evidence outside the source worktree.
+The packet names the review kind (`pre_commit` or `pre_merge`), the candidate commit, a change manifest of changed paths with hunk ranges, one acceptance question/lens, diff-targeted checks, cited gate evidence, explicit non-goals, `read_only_source: true`, the declared runtime budgets (dispatch hard cap, evidence budget, per-command timeout), `max_retries: 1`, and a stop condition. The reviewer may read and test the candidate and write scratch evidence outside the source worktree.
 
 The reviewer does not implement fixes, edit source, file tracker issues, create Kanban children, reassign unrelated work, merge, push, deploy, or mutate live infrastructure. A timeout, crash, wrong target, scope violation, mutation, or missing evidence is `REVIEW-INCOMPLETE`, never approval.
 

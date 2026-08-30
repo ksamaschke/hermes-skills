@@ -86,7 +86,8 @@ Use for:
 - fresh review packets instead of assignee-only handoffs;
 - exact-scope, one-lens review leaves;
 - profile/worktree environment preflight;
-- 600-second adversarial caps and one retry;
+- two-tier adversarial review budgets (dispatch hard cap plus evidence budget)
+  and one retry;
 - `APPROVED`, `CHANGES_REQUESTED`, and `REVIEW-INCOMPLETE` outcomes;
 - keeping tracker mutation, implementation, and deployment outside the review.
 
