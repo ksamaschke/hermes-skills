@@ -1119,3 +1119,21 @@ def test_fanin_reads_reports_only_and_verifies_hunk_coverage():
     assert "Do not re-run leaf checks or the project gate" in body
     assert "covered by exactly one leaf manifest" in body
     assert f"evidence_budget_seconds: {recovery.FANIN_EVIDENCE_BUDGET_SECONDS}" in body
+
+
+def test_change_manifest_entries_may_carry_hunk_ranges():
+    """The contract mandates hunk ranges; the guard must not reject them."""
+    assert recovery._exact_file_path("tools/validate_release_matrix.py:1-1336")
+    assert recovery._exact_file_path("Makefile:1-1,8-8,10-13")
+    assert recovery._exact_file_path(".forgejo/workflows/validate.yml:14-19")
+    # plain paths still valid
+    assert recovery._exact_file_path("tools/__init__.py")
+
+
+def test_hunk_range_parsing_rejects_malformed_and_non_range_colons():
+    assert not recovery._exact_file_path("tools/a.py:notarange")
+    assert not recovery._exact_file_path("tools/a.py:20-5")   # end before start
+    assert not recovery._exact_file_path("tools/a.py:0-5")    # 1-indexed
+    assert not recovery._exact_file_path("host:port/path")
+    assert not recovery._exact_file_path("/abs/path.py:1-2")
+    assert not recovery._exact_file_path("glob/*.py:1-2")

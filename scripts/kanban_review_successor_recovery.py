@@ -545,8 +545,27 @@ def is_review_leaf(task: dict[str, Any]) -> bool:
     )
 
 
-def _exact_file_path(value: str) -> bool:
+_HUNK_RANGE_RE = re.compile(r"^\d+-\d+(,\d+-\d+)*$")
+
+
+def _split_hunk_ranges(value: str) -> tuple[str, str | None]:
+    """Split `path:1-20,40-55` into (path, ranges).
+
+    A change manifest entry may carry hunk ranges. Only a trailing
+    `:<start>-<end>[,<start>-<end>...]` suffix is treated as ranges; any other
+    colon still makes the entry invalid.
+    """
     path = _clean(value)
+    if ":" not in path:
+        return path, None
+    head, _, tail = path.rpartition(":")
+    if head and _HUNK_RANGE_RE.match(tail):
+        return head, tail
+    return path, None
+
+
+def _exact_file_path(value: str) -> bool:
+    path, ranges = _split_hunk_ranges(value)
     if not path or path.startswith("/") or path.endswith("/"):
         return False
     if any(char in path for char in "*?[]{}") or "\x00" in path:
@@ -555,6 +574,11 @@ def _exact_file_path(value: str) -> bool:
         return False
     if ":" in path:
         return False
+    if ranges is not None:
+        for chunk in ranges.split(","):
+            start, _, end = chunk.partition("-")
+            if int(start) < 1 or int(end) < int(start):
+                return False
     return True
 
 
