@@ -23,20 +23,41 @@ The factory has separate responsibilities:
 A profile name is not a permission boundary. A profile called `reviewer` still
 needs a typed review packet and parent-side verification.
 
+## Review kinds
+
+The factory dispatches exactly two kinds of adversarial code review, and both
+review a **change set** rather than a code base:
+
+- `pre_commit` — reviews the working-tree change set an implementer proposes to
+  commit, scoped to the delta against the named base commit;
+- `pre_merge` — reviews the change set a pull/merge request would introduce,
+  scoped to the merge-base delta against the target branch.
+
+A review that is neither kind is an invalid packet. Neither kind may expand
+into a repository-wide audit; whole-codebase judgement is a separate
+orchestrator-filed task with its own card and budget. See
+[`change-scoped-review.md`](change-scoped-review.md).
+
 ## Review packet
 
 A review card is created fresh from a packet. It is not an implementation card
 with a new assignee. The packet contains:
 
 - implementation task and source issue/PR identity;
+- `review_kind`: `pre_commit` or `pre_merge`;
 - target repository, worktree, branch, and candidate commit;
 - implementer and reviewer profiles plus vendor-family comparison;
-- exact file paths, with no directory or glob scopes;
+- a change manifest: base reference, candidate reference, and the changed paths
+  with hunk ranges. No directory, glob, module, or topic scopes;
 - one acceptance question and one review lens;
-- original acceptance criteria and focused commands;
+- original acceptance criteria and diff-targeted commands;
+- cited gate evidence from the implementer/CI: command, exit code, run
+  reference, and the commit it ran against;
 - explicit non-goals and live-system boundaries;
 - `read_only_source: true`;
-- `max_runtime_seconds: 600` for each adversarial code-review leaf;
+- the declared runtime budgets for each adversarial code-review leaf: dispatch
+  hard cap (reference 1800s), evidence budget (reference 900s), and per-command
+  timeout (reference 120s);
 - `max_retries: 1`;
 - a stop condition and structured report format;
 - environment provenance: profile-scoped runtime, effective `cwd`, interpreter,
@@ -48,15 +69,26 @@ interpreters, skills, tools, or target paths are `REVIEW-INCOMPLETE` capability
 gaps owned by the factory, not product findings.
 
 Reject a packet containing `TDD first`, implementation instructions, tracker
-issue creation, child-task creation, deployment, or an unrelated repository.
-Route those actions to their owning role.
+issue creation, child-task creation, deployment, an unrelated repository, a
+non-diff scope, or a full-gate command in its checks. Route those actions to
+their owning role.
 
 ## Allowed reviewer work
 
-A reviewer may read the named candidate, inspect the diff, run focused checks,
-exercise fake or read-only services, and write scratch harnesses outside the
-source worktree. It may emit heartbeats and use the worker protocol's single
+A reviewer may read the named candidate, inspect the diff, run **diff-targeted**
+checks, exercise fake or read-only services, and write scratch harnesses outside
+the source worktree. It may emit heartbeats and use the worker protocol's single
 terminal transition for its own review run.
+
+Reading outside the diff is permitted only as context for a named changed hunk;
+unchanged code is not part of the finding surface, and a defect found only there
+is a `gaps` note for the orchestrator.
+
+The reviewer must not run the full project gate — `make test`, `make validate`,
+a full suite, or a full build. That evidence is produced by the implementer and
+CI and is *cited* in the packet; the reviewer confirms it matches the candidate
+commit. Missing or stale gate evidence is a `CHANGES_REQUESTED` finding, never a
+licence to run the gate.
 
 The reviewer may not edit source, tests, project configuration, or documentation
 in the candidate; commit, push, merge, or rebase; create or edit tracker issues;

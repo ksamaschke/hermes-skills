@@ -35,7 +35,8 @@ heartbeats, retries, and recovery. A source reconciler or progress digest does
 not start another dispatcher.
 
 `failure_limit` is a recovery breaker, not a review verdict. Review leaves set
-`max_retries: 1` individually and use a 600-second cap. A timeout, crash, or
+`max_retries: 1` individually and use the declared two-tier review budget. A
+timeout, crash, or
 spawn failure is `REVIEW-INCOMPLETE`, never approval.
 
 ## Role routing
@@ -76,20 +77,35 @@ an unchanged prompt. See `docs/profile-environment-contract.md`.
 
 ## Review dispatch contract
 
-Every adversarial review leaf is a fresh task with:
+Every adversarial review leaf is a fresh task reviewing a **change set**, never
+a code base. Its kind is exactly one of `pre_commit` (working-tree delta against
+the base commit) or `pre_merge` (merge-base delta against the target branch).
+Each leaf carries:
 
-- candidate commit, exact worktree, and exact file paths;
+- `review_kind` and a change manifest: base reference, candidate reference, and
+  changed paths with hunk ranges;
+- candidate commit and exact worktree;
 - one acceptance question and one review lens;
-- focused commands and explicit non-goals;
+- diff-targeted commands and explicit non-goals;
+- cited gate evidence - command, exit code, run reference, and commit - from the
+  implementer/CI. The reviewer never re-runs the full project gate;
 - `read_only_source: true`;
-- `max_runtime_seconds: 600`;
+- `max_runtime_seconds` set to the declared dispatch hard cap (reference 1800s),
+  with an evidence budget (reference 900s) and per-command timeout (120s);
 - `max_retries: 1`;
 - a structured verdict and stop condition.
+
+A leaf reviews at most five changed files and one acceptance question. Larger
+change sets are split into strict-subset slices with a bounded fan-in before
+dispatch. A worker killed at the dispatch hard cap is a factory fault to be
+diagnosed - provider backoff and forbidden gate commands are not fixed by
+narrowing scope.
 
 Do not reuse an implementation card with a new assignee. Reviewers do not
 implement fixes, file tracker issues, create Kanban children, deploy, or mutate
 live infrastructure. Those actions belong to the orchestrator or a separate
-implementer/release task. See `docs/reviewer-role-contract.md`.
+implementer/release task. See `docs/reviewer-role-contract.md` and
+`docs/change-scoped-review.md`.
 
 ## Delivery handoff
 

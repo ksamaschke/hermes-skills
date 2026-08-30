@@ -51,19 +51,96 @@ A profile name does not establish a role. The task packet must state the role.
 If a configured profile named `reviewer` is used for adversarial code review,
 apply the code-reviewer contract below rather than relying on the profile name.
 
+## Review kinds
+
+The factory dispatches exactly two kinds of adversarial code review. Both review
+a **change set**; neither reviews a code base.
+
+- **`pre_commit`** - the working-tree change set an implementer proposes to
+  commit. Scope basis: `git diff <base>` plus `git diff --cached` plus declared
+  untracked files, against the base commit named in the packet.
+- **`pre_merge`** - the change set a pull/merge request would introduce into the
+  target branch. Scope basis: `git diff $(git merge-base <target> <source>)..<source>`.
+
+A packet that is neither kind is invalid. Neither kind may grow into a
+repository-wide audit: if a change genuinely needs whole-codebase judgement, the
+orchestrator files a separate architecture-review task with its own card and
+budget. That is never an escalation of a commit or merge review.
+
+## Scope rule: the diff is the boundary
+
+The reviewed unit is the set of changed hunks - not the changed files in full,
+not their modules, not the repository. Scope is declared as a **change
+manifest**: base reference, candidate reference, and the enumerated changed
+paths with hunk ranges.
+
+A scope expressed as a directory, glob, module name, topic label, or "the
+repository" is invalid; return `REVIEW-INCOMPLETE: invalid review packet`.
+
+Reading outside the diff is allowed only as context for a specific changed hunk
+- the definition a changed line calls, the test covering it, the declaration it
+overrides. That reading must be traceable to a named hunk. Unchanged code is not
+part of the finding surface; a defect visible only there is a `gaps` note for
+the orchestrator, not a finding against this change set.
+
+## Runtime budget
+
+Reviews carry two distinct limits, because one wall clock covering model
+latency, provider backoff, and command execution produces kills rather than
+verdicts. Projects declare the values; the reference budget is:
+
+- `dispatch_hard_cap_seconds: 1800` - the dispatcher's `--max-runtime`
+  SIGTERM/SIGKILL backstop against a hung worker. Not a target.
+- `evidence_budget_seconds: 900` - the reviewer's own mandatory return point.
+- `command_timeout_seconds: 120` - hard cap on any single command.
+
+The reviewer records its start time, tracks elapsed time, and **returns a
+verdict at or before the evidence budget** with whatever evidence it holds,
+listing everything unchecked under `gaps`. Checkpoints: at 50% stop opening new
+context, at 70% stop starting new commands, at 100% emit the verdict.
+
+Returning at the evidence budget is correct behavior. Being killed at the
+dispatch hard cap is an anomaly - a broken reviewer, a broken route, or an
+invalid packet - and is always `REVIEW-INCOMPLETE`. Provider backoff counts
+against the evidence budget; a review consumed by `429`/cooldown returns
+`REVIEW-INCOMPLETE` naming the provider condition, never approval.
+
+## Execution boundary
+
+A change-scoped reviewer runs **diff-targeted checks only**: tests covering the
+changed hunks selected by node id/file/pattern, linters or type checks scoped to
+changed paths, focused probes and scratch harnesses outside the source worktree,
+and read-only inspection commands.
+
+It must not run the full project gate - `make test`, `make validate`, a full
+suite, or a full build - nor any command expected to exceed the per-command
+timeout.
+
+**The full gate is the implementer's and CI's evidence; the reviewer cites it
+and never re-runs it.** The packet carries the gate command, exit code, run
+reference, and the commit it ran against. The reviewer confirms that evidence
+exists and corresponds to the candidate commit. Missing, stale, or
+unverifiable gate evidence is a `CHANGES_REQUESTED` finding against the
+implementation card, not a reason to run the gate.
+
 ## Review packet
 
 Do not dispatch a review until the packet contains every field below:
 
 - implementation task ID and source issue/PR, if any;
+- `review_kind`: `pre_commit` or `pre_merge`;
 - target repository, worktree path, branch, and candidate commit;
 - implementer profile and reviewer profile, with vendor-family comparison;
-- exact file paths to inspect; no directories, globs, or topic labels;
-- one review lens and the acceptance questions it must answer;
-- original acceptance criteria and focused commands to run;
+- a change manifest: base reference, candidate reference, and changed paths with
+  hunk ranges. No directories, globs, modules, or topic labels;
+- one review lens and the single acceptance question it must answer;
+- original acceptance criteria and diff-targeted commands to run;
+- cited gate evidence: command, exit code, run reference, and commit;
 - explicit non-goals and live-system boundaries;
 - `read_only_source: true`;
-- `max_runtime_seconds: 600` for every adversarial code-review leaf;
+- the declared runtime budgets for every adversarial code-review leaf: dispatch
+  hard cap (reference 1800s), evidence budget (reference 900s), per-command
+  timeout (reference 120s);
 - `max_retries: 1`;
 - stop condition and required evidence format;
 - environment provenance: profile-scoped runtime, effective `cwd`, interpreter,
@@ -71,9 +148,10 @@ Do not dispatch a review until the packet contains every field below:
 
 A review card must not inherit an implementation prompt unchanged. Reject the
 packet if it contains implementation language such as "TDD first", "write the
-fix", or "make the production change", or if it asks the reviewer to create or
-edit tracker issues. The orchestrator creates a fresh review task with the
-review packet.
+fix", or "make the production change"; if it asks the reviewer to create or
+edit tracker issues; if its scope is not a change manifest; or if its checks
+include a full-gate command. The orchestrator creates a fresh review task with
+the review packet.
 
 ## Profile environment preflight
 
@@ -122,25 +200,31 @@ orchestrator/tracker lane, never inside the review.
 
 ## Procedure
 
-1. **Validate the packet.** Check exact paths, candidate commit, profiles,
-   read-only boundary, lens, commands, cap, retry limit, and stop condition.
-   Completion criterion: every required field is present and no prohibited
-   mutation is requested.
+1. **Validate the packet.** Check `review_kind`, the change manifest, candidate
+   commit, profiles, read-only boundary, lens, diff-targeted commands, cited
+   gate evidence, runtime budgets, retry limit, and stop condition. Completion
+   criterion: every required field is present, the scope is a change manifest,
+   no full-gate command is requested, and no prohibited mutation is requested.
 2. **Preflight the target.** Confirm the worktree, branch, candidate commit,
-   project instructions, and named files. If the target is missing or the
-   profile cannot resolve its required review capability, return
+   base reference, project instructions, and named changed paths. Record the
+   review start time and compute the evidence-budget deadline. If the target is
+   missing or the profile cannot resolve its required review capability, return
    `REVIEW-INCOMPLETE`; do not improvise a repository-wide search.
-3. **Read the artifact cold.** Inspect the diff and acceptance criteria before
-   exploring adjacent code. Keep the working set inside the packet.
-4. **Run the focused checks.** Exercise the declared behavior and error paths.
-   Prefer real, unmocked or state-asserting probes when the acceptance claim is
-   about resulting state. Record command, exit code, fixture, and result.
-5. **Stop at the boundary.** At roughly 70% of the time budget, stop opening
-   new files and return the evidence collected. A broader question becomes a
-   continuation or a new review slice, not an excuse to overrun the cap.
-6. **Check mutation and provenance.** Verify the candidate commit, changed-file
+3. **Read the change set cold.** Inspect the diff for the manifest hunks and the
+   acceptance criteria before reading any surrounding code. Keep the working set
+   inside the manifest; context reads must trace to a named hunk.
+4. **Verify the cited gate evidence.** Confirm the packet's gate command, exit
+   code, run reference, and commit match the candidate. Do not run the gate.
+   Missing or stale evidence is a `CHANGES_REQUESTED` finding.
+5. **Run the diff-targeted checks.** Exercise the changed behavior and its error
+   paths with checks scoped to the changed hunks, each within the per-command
+   timeout. Record command, exit code, fixture, and result.
+6. **Honor the evidence budget.** At 50% stop opening new context; at 70% stop
+   starting new commands; at 100% emit the verdict with recorded gaps. Do not
+   run past the evidence budget waiting to be killed at the dispatch cap.
+7. **Check mutation and provenance.** Verify the candidate commit, changed-file
    set, worktree status, and that scratch artifacts stayed outside the source.
-7. **Emit one verdict.** Use exactly one terminal outcome for the review run.
+8. **Emit one verdict.** Use exactly one terminal outcome for the review run.
    Do not call multiple competing terminal actions after the run is already
    terminal.
 
@@ -193,13 +277,31 @@ evidence before treating the report as true.
 ## Continuations and fan-in
 
 A timed-out leaf is preserved as `REVIEW-INCOMPLETE`. Do not retry the same
-prompt unchanged. The orchestrator creates a narrower continuation with a
-strict subset of the previous scope and carries prior evidence forward.
+prompt unchanged. **Classify the cause before choosing a remedy:**
 
-When several leaves are required, a bounded fan-in task checks coverage of the
-declared review manifest. It must not rescan the repository. Any uncovered
-file, incomplete leaf, changes-requested leaf, or contract violation blocks
-final approval.
+- provider backoff/`429`, a forbidden full-gate command, or an invalid packet -
+  the scope was never the problem. Fix the packet or the route and re-dispatch
+  the same slice. Do not narrow it;
+- genuine change-set size - the orchestrator creates a continuation whose change
+  manifest is a strict subset of the previous one, carrying prior evidence
+  forward.
+
+Raising the runtime budget is not a recovery step. A continuation chain that
+keeps timing out at shrinking scope is evidence of a budget or
+execution-boundary defect, not of a change set needing more splitting; escalate
+it as a factory fault.
+
+When a change set exceeds one leaf (more than five changed files or more than
+one acceptance question), the orchestrator splits it before dispatch: group
+changed hunks into coupled-concern slices, give each its own strict-subset
+manifest and single question, and create one bounded fan-in. The fan-in reads
+only the leaf reports and the coverage matrix; it never rescans the repository
+and never re-runs checks. Every hunk in the parent change set must appear in
+exactly one leaf manifest. Any uncovered hunk, incomplete leaf,
+changes-requested leaf, or contract violation blocks final approval.
+
+Fail closed only when a single hunk cannot fit a leaf budget: report the change
+set as unreviewable and require the implementer to split the commit or PR.
 
 Do not combine code review with source-tracker filing. If a finding should become
 an issue, the orchestrator creates a separate tracker task after adjudicating
@@ -213,7 +315,8 @@ Before dispatch:
 - verify the exact reviewer profile and its resolved skills/tools;
 - verify the reviewer is independent from the implementer vendor family;
 - use the observed per-profile concurrency cap, not an optimistic default;
-- keep the leaf at 600 seconds and `max_retries=1`;
+- set `--max-runtime` to the declared dispatch hard cap and carry the evidence
+  budget and per-command timeout in the packet body; keep `max_retries=1`;
 - do not infer read-only capability from a skill name; skills do not provision
   tools or revoke terminal/file write capability.
 
@@ -234,7 +337,17 @@ for one product's review protocol.
 
 - Reassigning an implementation card to a reviewer without replacing its body.
 - Asking a reviewer to file tracker findings while it is reviewing.
-- Calling a 1,800-second broad review "bounded" because it eventually finished.
+- Declaring scope as file paths, a module, or a directory instead of a change
+  manifest - a whole file is not a change set, and it lets the review drift into
+  surrounding code.
+- Running the project gate inside a review. It is the single largest consumer of
+  the budget and the evidence already exists; cite it.
+- Letting one wall clock cover model latency, provider backoff, and command
+  execution, so the worker is killed instead of returning a verdict.
+- Treating a dispatch-cap kill as the reviewer's normal stop condition rather
+  than as a factory fault.
+- Narrowing scope in response to a timeout that was actually caused by provider
+  backoff or a forbidden gate command.
 - Treating a reviewer summary, heartbeat, or successful test command as approval.
 - Letting a reviewer expand from one repository to a private overlay or live
   cluster without a new packet.
@@ -246,7 +359,14 @@ for one product's review protocol.
 The review contract is satisfied only when:
 
 - the packet is complete and read back from the Kanban task;
-- the reviewer reached a terminal outcome exactly once;
+- `review_kind` is exactly `pre_commit` or `pre_merge`, and scope is a change
+  manifest with base reference, candidate reference, and hunk ranges;
+- `--max-runtime` equals the declared dispatch hard cap, and the evidence budget
+  and per-command timeout are present in the packet;
+- no full-gate command appears in the checks, and gate evidence is cited with a
+  run reference matching the candidate commit;
+- the reviewer reached a terminal outcome exactly once, inside its evidence
+  budget;
 - exact scope and candidate commit are recorded;
 - source and live-system mutation checks are clean;
 - every acceptance criterion has evidence or an explicit gap;

@@ -27,7 +27,7 @@ implementer_profile: implementer (OpenAI family)
 reviewer_profile: reviewer (Claude family)
 vendor_family_independent: true
 read_only_source: true
-max_runtime_seconds: 600
+max_runtime_seconds: 1800
 max_retries: 1
 allowed_verdicts: APPROVED, CHANGES_REQUESTED, REVIEW-INCOMPLETE
 review_lens: fail-closed review evidence
@@ -47,7 +47,7 @@ VALID_TASK = {
     "assignee": "reviewer",
     "status": "ready",
     "workspace_path": "/repo/.worktrees/t_impl",
-    "max_runtime_seconds": 600,
+    "max_runtime_seconds": recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS,
     "max_retries": 1,
 }
 
@@ -66,7 +66,7 @@ implementer_profile: implementer (OpenAI family)
 reviewer_profile: reviewer (Claude family)
 vendor_family_independent: true
 read_only_source: true
-max_runtime_seconds: 600
+max_runtime_seconds: 1800
 review_lens: broad approval evidence
 exact_scope:
 - file-01.py
@@ -86,7 +86,7 @@ stop_condition: stop at the named scope and questions.
     "assignee": "reviewer",
     "status": "ready",
     "workspace_path": "/repo/.worktrees/t_impl",
-    "max_runtime_seconds": 600,
+    "max_runtime_seconds": recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS,
     "max_retries": None,
 }
 
@@ -127,7 +127,7 @@ def test_valid_packet_has_a_durable_bounded_contract():
     assert packet["files"] == ["tools/validator.py"]
     assert packet["questions"] == ["Does the validator reject incomplete approval evidence?"]
     assert packet["review_lens"] == "fail-closed review evidence"
-    assert packet["max_runtime_seconds"] == 600
+    assert packet["max_runtime_seconds"] == recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS
     assert packet["max_retries"] == 1
 
 
@@ -219,7 +219,7 @@ def test_guard_can_supply_durable_budget_fields_missing_from_list_json():
 
     assert recovery.dispatchable_review_packets(
         [list_row],
-        durable_loader=lambda task_id: {"max_runtime_seconds": 600, "max_retries": 1},
+        durable_loader=lambda task_id: {"max_runtime_seconds": recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS, "max_retries": 1},
     ) == []
 
 
@@ -231,13 +231,13 @@ def test_durable_task_fields_read_the_board_row_without_writing(tmp_path, monkey
         )
         connection.execute(
             "INSERT INTO tasks VALUES (?, ?, ?)",
-            ("t_review", 600, 1),
+            ("t_review", recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS, 1),
         )
         connection.commit()
     monkeypatch.setattr(recovery, "_board_db_path", lambda board: database)
 
     assert recovery._durable_task_fields("board", "t_review") == {
-        "max_runtime_seconds": 600,
+        "max_runtime_seconds": recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS,
         "max_retries": 1,
     }
 
@@ -420,7 +420,7 @@ def test_successor_body_round_trips_through_the_packet_guard():
         "assignee": packet["reviewer_profile"],
         "status": "ready",
         "workspace_path": packet["target_worktree"],
-        "max_runtime_seconds": 600,
+        "max_runtime_seconds": recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS,
         "max_retries": 1,
     }
 
@@ -682,7 +682,7 @@ def test_fanin_creation_accepts_complete_provenance_readback(monkeypatch):
     monkeypatch.setattr(
         recovery,
         "_enrich_task_with_durable_fields",
-        lambda board, task: {**task, "max_runtime_seconds": 900, "max_retries": 1},
+        lambda board, task: {**task, "max_runtime_seconds": recovery.FANIN_DISPATCH_HARD_CAP_SECONDS, "max_retries": 1},
     )
     monkeypatch.setattr(recovery, "_archive_created_task", lambda board, task_id: archived.append(task_id))
 
@@ -723,7 +723,7 @@ def test_fanin_creation_rejects_incomplete_provenance_and_rolls_back(monkeypatch
     monkeypatch.setattr(
         recovery,
         "_enrich_task_with_durable_fields",
-        lambda board, task: {**task, "max_runtime_seconds": 900, "max_retries": 1},
+        lambda board, task: {**task, "max_runtime_seconds": recovery.FANIN_DISPATCH_HARD_CAP_SECONDS, "max_retries": 1},
     )
     monkeypatch.setattr(recovery, "_archive_created_task", lambda board, task_id: archived.append(task_id))
 
@@ -923,7 +923,13 @@ def test_fanin_creation_validates_both_durable_budget_fields_and_rolls_back(monk
     monkeypatch.setattr(
         recovery,
         "_enrich_task_with_durable_fields",
-        lambda board, task: {**task, "max_runtime_seconds": 600, "max_retries": 1},
+        # Deliberately wrong budget: must not equal the fan-in dispatch cap, so
+        # the durable-budget readback fails and the created task is rolled back.
+        lambda board, task: {
+            **task,
+            "max_runtime_seconds": recovery.FANIN_DISPATCH_HARD_CAP_SECONDS - 1,
+            "max_retries": 1,
+        },
     )
     monkeypatch.setattr(recovery, "_archive_created_task", lambda board, task_id: archived.append(task_id))
 
@@ -992,3 +998,124 @@ def test_cron_wrapper_requires_an_explicit_board_and_uses_a_sibling_script():
     assert "with_name(\"kanban_review_successor_recovery.py\")" in wrapper
     assert '"--apply"' in wrapper
     assert '"--quiet"' in wrapper
+
+
+# --- Change-scoped review invariants (docs/change-scoped-review.md) ---------
+#
+# Regression guards for the observed AI Gateway failure mode: adversarial review
+# leaves were SIGKILLed at 602s/608s/610s against a single 600s wall clock. One
+# of them was a depth-3 continuation of a single file and a single acceptance
+# question, so narrowing scope could not fix it. The causes were a one-tier
+# budget and an execution boundary that allowed the full project gate inside a
+# review (one leaf spent 420s on `make test` plus 188s on a second gate).
+
+
+def _change_scoped_successor():
+    packet = recovery.parse_review_packet(BROAD_TASK)
+    spec = recovery.successor_specs(packet)[0]
+    body = recovery.successor_body(
+        packet,
+        {"id": 7, "status": "timed_out", "outcome": "timed_out"},
+        spec,
+        original_task_id=packet["task_id"],
+    )
+    command = recovery.create_command(
+        board="board",
+        packet=packet,
+        spec=spec,
+        body=body,
+        key="k",
+    )
+    return body, command
+
+
+def test_review_budget_is_two_tier_and_clears_the_observed_kill_window():
+    """A single wall clock produces kills; the reviewer needs its own deadline."""
+    assert (
+        recovery.REVIEW_EVIDENCE_BUDGET_SECONDS
+        < recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS
+    )
+    assert (
+        recovery.REVIEW_COMMAND_TIMEOUT_SECONDS
+        < recovery.REVIEW_EVIDENCE_BUDGET_SECONDS
+    )
+    # Reviews died at ~610s; the hard cap must clear that with real headroom.
+    assert recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS >= 1800
+    assert recovery.REVIEW_EVIDENCE_BUDGET_SECONDS >= 900
+
+
+def test_successor_carries_both_budget_tiers_and_dispatch_cap_on_the_card():
+    body, command = _change_scoped_successor()
+
+    assert f"dispatch_hard_cap_seconds: {recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS}" in body
+    assert f"evidence_budget_seconds: {recovery.REVIEW_EVIDENCE_BUDGET_SECONDS}" in body
+    assert f"command_timeout_seconds: {recovery.REVIEW_COMMAND_TIMEOUT_SECONDS}" in body
+    assert command[command.index("--max-runtime") + 1] == str(
+        recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS
+    )
+
+
+def test_successor_is_declared_change_scoped_not_codebase_scoped():
+    body, _ = _change_scoped_successor()
+    assert "review_kind: pre_commit" in body
+    assert "review_scope: change_set" in body
+    assert "changed hunks" in body
+    assert "not the repository" in body
+
+
+def test_successor_forbids_running_the_full_project_gate():
+    """One killed leaf spent 420s on `make test` plus 188s on a second gate."""
+    body, _ = _change_scoped_successor()
+    assert "Do not run the full project gate" in body
+    assert "make test" in body
+    assert "never re-run" in body
+
+
+def test_successor_requires_a_verdict_at_the_evidence_budget():
+    body, _ = _change_scoped_successor()
+    assert f"at or before {recovery.REVIEW_EVIDENCE_BUDGET_SECONDS}s" in body
+    assert "under gaps" in body
+    assert "factory fault" in body
+
+
+def test_change_scoped_successor_still_passes_the_packet_guard():
+    """The new fields must not break durable packet validation."""
+    packet = recovery.parse_review_packet(BROAD_TASK)
+    spec = recovery.successor_specs(packet)[0]
+    body, _ = _change_scoped_successor()
+    successor = {
+        "id": "t_successor",
+        "title": "Review continuation",
+        "body": body,
+        "assignee": packet["reviewer_profile"],
+        "status": "ready",
+        "workspace_path": packet["target_worktree"],
+        "max_runtime_seconds": recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS,
+        "max_retries": 1,
+    }
+    assert recovery.validate_review_packet(successor) == []
+    assert recovery.parse_review_packet(successor)["questions"] == [spec["question"]]
+
+
+def test_packet_guard_rejects_the_old_600_second_single_tier_cap():
+    """The broken cap must not be reintroducible through a packet."""
+    stale = VALID_BODY.replace(
+        f"max_runtime_seconds: {recovery.REVIEW_DISPATCH_HARD_CAP_SECONDS}",
+        "max_runtime_seconds: 600",
+    )
+    task = {**VALID_TASK, "body": stale, "max_runtime_seconds": 600}
+    errors = recovery.validate_review_packet(task)
+    assert any("max_runtime_seconds" in error for error in errors)
+
+
+def test_fanin_reads_reports_only_and_verifies_hunk_coverage():
+    fanin = {
+        "id": "t_fanin",
+        "workspace_path": "/repo/wt",
+        "body": "implementation_task: t_impl\nsource_issue: https://example.invalid/1",
+    }
+    body = recovery.fanin_body(fanin, ["t_a", "t_b"], key="fanin-key")
+
+    assert "Do not re-run leaf checks or the project gate" in body
+    assert "covered by exactly one leaf manifest" in body
+    assert f"evidence_budget_seconds: {recovery.FANIN_EVIDENCE_BUDGET_SECONDS}" in body

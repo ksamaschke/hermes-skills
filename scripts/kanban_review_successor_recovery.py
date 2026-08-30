@@ -56,6 +56,37 @@ MAX_FILES_PER_SUCCESSOR = 2
 # creating an unbounded or lossy successor set.
 MAX_SUCCESSOR_SPECS = 8
 
+# Change-scoped review budgets. See docs/change-scoped-review.md.
+#
+# Two tiers, because a single wall clock covering model latency, provider
+# backoff, and command execution produces kills instead of verdicts. Observed
+# failure mode: adversarial review leaves were killed at 602s/608s/610s against
+# a single 600s cap -- one of them a depth-3 continuation of a single file and a
+# single question. Narrowing scope could not fix a budget defect.
+#
+# - dispatch hard cap: the dispatcher's --max-runtime SIGTERM/SIGKILL backstop
+#   against a hung worker. Not a target and not a budget.
+# - evidence budget: the point at which the reviewer must itself return a
+#   verdict with recorded gaps. Reaching it is correct behavior.
+# - command timeout: hard cap on any single command, so a full project gate
+#   cannot consume the review.
+REVIEW_DISPATCH_HARD_CAP_SECONDS = int(
+    os.environ.get("REVIEW_DISPATCH_HARD_CAP_SECONDS", "1800")
+)
+REVIEW_EVIDENCE_BUDGET_SECONDS = int(
+    os.environ.get("REVIEW_EVIDENCE_BUDGET_SECONDS", "900")
+)
+REVIEW_COMMAND_TIMEOUT_SECONDS = int(
+    os.environ.get("REVIEW_COMMAND_TIMEOUT_SECONDS", "120")
+)
+# Bounded fan-in reads leaf reports only; it never rescans or re-runs checks.
+FANIN_DISPATCH_HARD_CAP_SECONDS = int(
+    os.environ.get("FANIN_DISPATCH_HARD_CAP_SECONDS", "1800")
+)
+FANIN_EVIDENCE_BUDGET_SECONDS = int(
+    os.environ.get("FANIN_EVIDENCE_BUDGET_SECONDS", "900")
+)
+
 _REVIEW_LEAF_RE = re.compile(
     r"review[_ ]type\s*:\s*(?:fresh,\s*)?read-only\s+adversarial\s+"
     r"(?:code(?:/config)?|config)\s+review\s+leaf",
@@ -580,10 +611,14 @@ def validate_review_packet(task: dict[str, Any]) -> list[str]:
     if not packet["checks"]:
         errors.append("focused_checks must contain at least one bounded check")
 
-    if packet["max_runtime_seconds"] != 600:
-        errors.append("packet max_runtime_seconds must be 600")
-    if _int_value(task.get("max_runtime_seconds")) != 600:
-        errors.append("durable task max_runtime_seconds must be 600")
+    if packet["max_runtime_seconds"] != REVIEW_DISPATCH_HARD_CAP_SECONDS:
+        errors.append(
+            f"packet max_runtime_seconds must be {REVIEW_DISPATCH_HARD_CAP_SECONDS}"
+        )
+    if _int_value(task.get("max_runtime_seconds")) != REVIEW_DISPATCH_HARD_CAP_SECONDS:
+        errors.append(
+            f"durable task max_runtime_seconds must be {REVIEW_DISPATCH_HARD_CAP_SECONDS}"
+        )
     if packet["max_retries"] != 1:
         errors.append("packet max_retries must be 1")
     if _int_value(task.get("max_retries")) != 1:
@@ -860,15 +895,33 @@ def successor_body(
         f"reviewer_profile: {packet['reviewer_profile']}",
         "vendor_family_independent: true",
         "read_only_source: true",
-        "max_runtime_seconds: 600",
+        "review_kind: pre_commit",
+        "review_scope: change_set",
+        f"max_runtime_seconds: {REVIEW_DISPATCH_HARD_CAP_SECONDS}",
+        f"dispatch_hard_cap_seconds: {REVIEW_DISPATCH_HARD_CAP_SECONDS}",
+        f"evidence_budget_seconds: {REVIEW_EVIDENCE_BUDGET_SECONDS}",
+        f"command_timeout_seconds: {REVIEW_COMMAND_TIMEOUT_SECONDS}",
         "max_retries: 1",
         "allowed_verdicts: APPROVED, CHANGES_REQUESTED, REVIEW-INCOMPLETE",
         "review_lens: " + str(spec.get("review_lens") or packet.get("review_lens") or "bounded acceptance review"),
         "",
         "This is a strict-subset continuation, not an identical retry.",
         "The prior run is incomplete evidence, never a finding or approval.",
+        "Review the changed hunks in the exact scope below, not the whole files and not the repository.",
         "Inspect only the exact scope below. Do not edit source, tracker state, Git history, or live systems.",
         "Do not create child tasks or perform deployment/release actions.",
+        (
+            "Run diff-targeted checks only; each command must stay within "
+            f"{REVIEW_COMMAND_TIMEOUT_SECONDS}s. Do not run the full project gate "
+            "(make test, make validate, a full suite or build): that evidence is the "
+            "implementer's/CI's and is cited here, never re-run."
+        ),
+        (
+            f"Return a verdict at or before {REVIEW_EVIDENCE_BUDGET_SECONDS}s with the "
+            "evidence you hold, listing anything unchecked under gaps. At 50% of that "
+            "budget stop opening new context; at 70% stop starting new commands. Being "
+            "killed at the dispatch cap is a factory fault, not a stop condition."
+        ),
         "Return one verdict with exact evidence, gaps, mutations, and next_action.",
         "",
         "exact_scope:",
@@ -911,7 +964,7 @@ def create_command(
         "--priority",
         str(packet.get("priority") or 90),
         "--max-runtime",
-        "600",
+        str(REVIEW_DISPATCH_HARD_CAP_SECONDS),
         "--max-retries",
         "1",
         "--created-by",
@@ -1049,13 +1102,17 @@ def fanin_body(fanin: dict[str, Any], parent_ids: list[str], *, key: str) -> str
             f"leaf_tasks: {', '.join(parent_ids)}",
             f"target_worktree: {_clean(fanin.get('workspace_path'))}",
             "read_only_source: true",
-            "max_runtime_seconds: 900",
+            f"max_runtime_seconds: {FANIN_DISPATCH_HARD_CAP_SECONDS}",
+            f"dispatch_hard_cap_seconds: {FANIN_DISPATCH_HARD_CAP_SECONDS}",
+            f"evidence_budget_seconds: {FANIN_EVIDENCE_BUDGET_SECONDS}",
             "max_retries: 1",
             "allowed_verdicts: APPROVED, CHANGES_REQUESTED, REVIEW-INCOMPLETE",
             "",
             "Read only the completed parent leaf handoffs and attached evidence.",
             "Do not rescan the repository, edit source/tracker/Git, create tasks, or deploy.",
+            "Do not re-run leaf checks or the project gate; reconcile the reported evidence only.",
             "Reconcile every replacement leaf against the original acceptance criteria.",
+            "Verify that every changed hunk of the parent change set is covered by exactly one leaf manifest.",
             "Any missing, timed-out, changes-requested, mutated, or uncovered leaf prevents approval.",
             "A replacement fan-in is not approval; it only restores the dependency graph.",
             "stop_condition: fan-in only; do not repeat leaf review or repository-wide discovery.",
@@ -1079,7 +1136,7 @@ def fanin_command(board: str, fanin: dict[str, Any], parent_ids: list[str], body
         "--priority",
         str(fanin.get("priority") or 90),
         "--max-runtime",
-        "900",
+        str(FANIN_DISPATCH_HARD_CAP_SECONDS),
         "--max-retries",
         "1",
         "--created-by",
@@ -1188,7 +1245,7 @@ def _create_successor(
         durable_task = _enrich_task_with_durable_fields(board, task)
         if task.get("assignee") != packet["reviewer_profile"]:
             raise RuntimeError(f"successor {task_id} assignee readback failed")
-        if _int_value(durable_task.get("max_runtime_seconds")) != 600 or _int_value(durable_task.get("max_retries")) != 1:
+        if _int_value(durable_task.get("max_runtime_seconds")) != REVIEW_DISPATCH_HARD_CAP_SECONDS or _int_value(durable_task.get("max_retries")) != 1:
             raise RuntimeError(f"successor {task_id} durable budget readback failed")
         if str(task.get("workspace_path") or "") != packet["target_worktree"]:
             raise RuntimeError(f"successor {task_id} workspace readback failed")
@@ -1244,7 +1301,7 @@ def _fanin_provenance_errors(
         "source_issue": _first_field(source_body, "source_issue", "source issue"),
         "target_worktree": _clean(fanin.get("workspace_path")),
         "read_only_source": "true",
-        "max_runtime_seconds": "900",
+        "max_runtime_seconds": str(FANIN_DISPATCH_HARD_CAP_SECONDS),
         "max_retries": "1",
         "allowed_verdicts": "APPROVED, CHANGES_REQUESTED, REVIEW-INCOMPLETE",
         "stop_condition": "fan-in only; do not repeat leaf review or repository-wide discovery",
@@ -1308,7 +1365,7 @@ def _create_fanin(board: str, fanin: dict[str, Any], parent_ids: list[str], key:
         if len(actual) != len(parent_ids) or set(actual) != set(parent_ids):
             raise RuntimeError(f"replacement fan-in {task_id} dependency readback failed")
         if (
-            _int_value(durable_task.get("max_runtime_seconds")) != 900
+            _int_value(durable_task.get("max_runtime_seconds")) != FANIN_DISPATCH_HARD_CAP_SECONDS
             or _int_value(durable_task.get("max_retries")) != 1
         ):
             raise RuntimeError(f"replacement fan-in {task_id} durable budget readback failed")
@@ -1453,7 +1510,7 @@ def _recover_review_leaves(
                     "status": "ready",
                     "assignee": packet["reviewer_profile"],
                     "workspace_path": packet["target_worktree"],
-                    "max_runtime_seconds": 600,
+                    "max_runtime_seconds": REVIEW_DISPATCH_HARD_CAP_SECONDS,
                     "max_retries": 1,
                     "body": successor_body(packet, failure, spec, original_task_id=task_id)
                     + f"\nreview_successor_idempotency_key: {key}\n",

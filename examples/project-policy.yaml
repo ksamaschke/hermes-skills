@@ -89,6 +89,23 @@ review:
   required: true
   independent_vendor_family: true
   implementer_self_review_is_final: false
+  # Adversarial reviews are change-scoped. The only two kinds are pre_commit
+  # (working-tree delta vs. base commit) and pre_merge (merge-base delta vs.
+  # target branch). Neither may expand into a whole-codebase review.
+  kinds: [pre_commit, pre_merge]
+  scope: change_set # change_set only; file_list/module/repository are invalid
+  # Two-tier runtime budget. A single wall clock covering model latency,
+  # provider backoff, and command execution produces kills instead of verdicts.
+  dispatch_hard_cap_seconds: 1800 # dispatcher --max-runtime SIGTERM/SIGKILL backstop
+  evidence_budget_seconds: 900 # reviewer MUST return a verdict by this point
+  command_timeout_seconds: 120 # hard cap on any single command
+  max_changed_files_per_leaf: 5
+  acceptance_questions_per_leaf: 1
+  # The reviewer runs diff-targeted checks only. The full project gate is the
+  # implementer's/CI's evidence and is cited, never re-run inside a review.
+  reviewer_may_run_full_gate: false
+  gate_evidence_source: implementer_ci # cited with command, exit code, run ref, commit
+  oversized_change_set: split_then_fan_in # split_then_fan_in | fail_closed
 
 safety:
   protected_paths: []
