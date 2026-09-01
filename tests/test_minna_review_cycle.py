@@ -208,6 +208,30 @@ class StateAndLockTests(unittest.TestCase):
         )
         self.assertEqual(calls[1][-1], "refs/remotes/origin/dev")
 
+    def test_review_preflight_uses_wide_enabled_skill_listing(self) -> None:
+        head = "f" * 40
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append((args, kwargs))
+            if "skills" in args:
+                return subprocess.CompletedProcess(
+                    args, 0, stdout="kanban-reviewer-contract enabled\n", stderr=""
+                )
+            return subprocess.CompletedProcess(args, 0, stdout=head + "\n", stderr="")
+
+        with mock.patch.object(self.cycle.subprocess, "run", side_effect=fake_run), \
+                mock.patch.object(
+                    self.cycle.shutil, "which", side_effect=lambda name: f"/usr/bin/{name}"
+                ):
+            result = self.cycle.review_preflight(Path("/tmp/review"), head)
+
+        self.assertIn("PASS", result)
+        skill_args, skill_kwargs = calls[0]
+        self.assertEqual(skill_args[-3:], ["skills", "list", "--enabled-only"])
+        self.assertEqual(skill_kwargs["env"]["COLUMNS"], "240")
+        self.assertEqual(skill_kwargs["env"]["NO_COLOR"], "1")
+
     def test_gate_command_refuses_to_start_after_gate_wide_deadline(self) -> None:
         with tempfile.NamedTemporaryFile(mode="w+") as log:
             with self.assertRaises(subprocess.TimeoutExpired):

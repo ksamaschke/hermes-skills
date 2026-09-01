@@ -862,12 +862,25 @@ def prepare_review_checkout(pr: dict, *, review_round: int = 1) -> Path:
 
 def review_preflight(review_path: Path, head_sha: str) -> str:
     """Bounded controller preflight for the same local profile/runtime boundary."""
+    profile_env = _clean_subprocess_env()
+    # Rich truncates skill names to the detected terminal width. Captured cron
+    # subprocesses have no useful terminal geometry, which previously rendered
+    # ``kanban-reviewer-con…`` and caused a false missing-skill failure.
+    profile_env.update({"COLUMNS": "240", "LINES": "60", "NO_COLOR": "1"})
     profile = subprocess.run(
-        [shutil.which("hermes") or "hermes", "-p", CFG["review_profile"], "skills", "list"],
-        text=True, capture_output=True, timeout=120,
+        [
+            shutil.which("hermes") or "hermes",
+            "-p", CFG["review_profile"],
+            "skills", "list", "--enabled-only",
+        ],
+        text=True, capture_output=True, timeout=120, env=profile_env,
     )
     if profile.returncode != 0 or "kanban-reviewer-contract" not in profile.stdout:
-        raise RuntimeError("reviewer profile cannot resolve kanban-reviewer-contract")
+        detail = " ".join((profile.stderr or profile.stdout).split())[-300:]
+        raise RuntimeError(
+            "reviewer profile cannot resolve kanban-reviewer-contract"
+            + (f": {detail}" if detail else "")
+        )
     required = ["git", "cargo", "node", "pnpm"]
     resolved = {name: shutil.which(name) or "" for name in required}
     missing = [name for name, path in resolved.items() if not path]
