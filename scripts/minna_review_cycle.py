@@ -1457,6 +1457,30 @@ def _review_worktree_clean(path: str, head_sha: str) -> tuple[bool, str]:
     return True, "clean"
 
 
+def scope_entry_aliases(entry: str) -> set[str]:
+    """Return textually different but range-equivalent scope spellings."""
+    if ":" not in entry:
+        return {entry}
+    path, ranges = entry.rsplit(":", 1)
+    segments = ranges.split(",")
+    if not segments or any(not re.fullmatch(r"\d+(?:-\d+)?", part) for part in segments):
+        return {entry}
+    compact: list[str] = []
+    expanded: list[str] = []
+    for segment in segments:
+        if "-" in segment:
+            start, end = segment.split("-", 1)
+        else:
+            start = end = segment
+        compact.append(start if start == end else f"{start}-{end}")
+        expanded.append(f"{start}-{end}")
+    return {
+        entry,
+        f"{path}:{','.join(compact)}",
+        f"{path}:{','.join(expanded)}",
+    }
+
+
 def review_leaf_report(task: dict, scope: list[str], head_sha: str, review_path: str) -> dict:
     verdict, evidence = leaf_verdict(task)
     verdict = verdict or "REVIEW-INCOMPLETE"
@@ -1464,7 +1488,10 @@ def review_leaf_report(task: dict, scope: list[str], head_sha: str, review_path:
         verdict = "REVIEW-INCOMPLETE"
         evidence += "\ncontract gap: candidate mismatch"
     if verdict == "APPROVED":
-        absent = [entry for entry in scope if entry not in evidence]
+        absent = [
+            entry for entry in scope
+            if not any(alias in evidence for alias in scope_entry_aliases(entry))
+        ]
         if absent:
             verdict = "REVIEW-INCOMPLETE"
             evidence += "\ncontract gap: report omitted exact scope " + ", ".join(absent)

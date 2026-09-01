@@ -348,6 +348,30 @@ class ReviewPacketTests(unittest.TestCase):
         self.assertIsNone(verdict)
         self.assertIn("crafted key", evidence)
 
+    def test_single_line_scope_range_has_compact_equivalent(self) -> None:
+        entry = "crates/minna-vault/src/lib.rs:259-259,289-314,541-573"
+        self.assertIn(
+            "crates/minna-vault/src/lib.rs:259,289-314,541-573",
+            self.cycle.scope_entry_aliases(entry),
+        )
+
+    def test_review_report_accepts_equivalent_single_line_scope_notation(self) -> None:
+        scope = ["crates/minna-vault/src/lib.rs:259-259,289-314,541-573"]
+        evidence = (
+            '"candidate_commit": "' + "c" * 40 + '", '
+            '"scope_checked": ["crates/minna-vault/src/lib.rs:259,289-314,541-573"]'
+        )
+        with (
+            mock.patch.object(self.cycle, "leaf_verdict", return_value=("APPROVED", evidence)),
+            mock.patch.object(self.cycle, "task_matches_candidate", return_value=True),
+            mock.patch.object(self.cycle, "_review_worktree_clean", return_value=(True, "clean")),
+        ):
+            report = self.cycle.review_leaf_report(
+                {"id": "t_review"}, scope, "c" * 40, "/tmp/review"
+            )
+
+        self.assertEqual(report["verdict"], "APPROVED")
+
     def test_create_leaf_pins_cross_family_model_and_exact_checkout(self) -> None:
         sha = "e" * 40
         pr = {
