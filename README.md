@@ -136,6 +136,23 @@ install -m 755 scripts/kanban_review_successor_recovery.py ~/.hermes/scripts/kan
 install -m 755 scripts/kanban_review_successor_recovery_cron.py ~/.hermes/scripts/kanban_review_successor_recovery_cron.py
 ```
 
+The repository also carries the deterministic Minna outbound PR controller used
+as a concrete project add-on. Install the controller, its packet validator, and
+the silent cron wrapper together, then copy and adapt the example configuration:
+
+```bash
+install -m 644 scripts/review_packet_integrity.py ~/.hermes/scripts/review_packet_integrity.py
+install -m 755 scripts/minna_review_cycle.py ~/.hermes/scripts/minna_review_cycle.py
+install -m 755 scripts/minna_review_cycle_cron.py ~/.hermes/scripts/minna_review_cycle_cron.py
+install -m 600 examples/minna-review-cycle.json ~/.hermes/scripts/minna-review-cycle.json
+```
+
+The project configuration must pin a reviewer provider/model whose vendor family
+is independent from the implementer, define the full fresh-clone gate, and list
+product source issues in dependency order. Run the controller without `--apply`
+first; only schedule the wrapper after that dry run and one controlled apply tick
+have been read back.
+
 The recovery add-on validates the durable packet before dispatch, keeps authored
 acceptance questions verbatim, creates at most eight lossless two-file successor
 leaves, and preserves an incomplete packet when that bound cannot cover the
