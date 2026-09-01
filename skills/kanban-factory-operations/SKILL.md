@@ -1,7 +1,7 @@
 ---
 name: kanban-factory-operations
 description: "Use when Kanban work stalls; recover dispatch and review."
-version: 0.1.0
+version: 0.2.0
 author: Karsten Samaschke, Hermes Agent
 license: MIT
 platforms: [linux, macos, windows]
@@ -62,6 +62,33 @@ Guardrails constrain the action, not the orchestrator's decision ownership:
 preserve useful work, do not bypass independent review or deployment policy,
 do not take destructive or irreversible action without rollback or approval,
 and do not start a second dispatcher.
+
+## Action-first triage admission
+
+A zero-ready live snapshot is an action trigger, not a no-progress conclusion.
+Before reporting `IDLE-BY-GATING`, the orchestrator must inspect the current
+triage frontier and parent completion using the procedure in
+`references/action-first-triage-admission.md`. Reconcile the complete `ready`,
+`running`, `review`, `todo`, `blocked`, and `triage` scans, current claims and
+runs, canonical identities, parent links, diagnostics, archived duplicates,
+and effective global/per-profile WIP.
+
+When safe, select **at most one existing canonical parent-complete lane** and
+perform **one bounded audited admission/remediation action** through the
+supported board/coordinator path. Do not create a new lane merely to fill
+capacity, manually spawn a worker, batch admissions, or emit a status-only
+no-progress report when a safe independent triage action exists. Read back the
+exact action, idempotency key, parent evidence, status, owner, retry state, WIP
+accounting, and audit event before claiming progress.
+
+Parked work, unfinished or ambiguous parents, malformed/stale contracts,
+duplicate identities, and WIP-full lanes remain unchanged. Genuine external or
+human gates, including protected signer/credential boundaries, hold only that
+lane; continue independent work without printing or copying credentials. An
+internal factory defect, including a routine internal publication or handoff
+defect, is not a human gate: route a keyed remediation, reuse its canonical
+idempotency key, and verify the readback. Use `IDLE-BY-GATING` only after the
+complete status scans prove no safe action remains.
 
 ## Add-on recovery layer
 
@@ -255,8 +282,9 @@ For completed work, read the task/run back and verify the summary, tests, diff/r
 
 ## References
 
-When working from a repository checkout, use the companion references for the detailed runtime-drift symptom matrix and stall-recovery contract:
+When working from a repository checkout, use the companion references for the detailed runtime-drift symptom matrix, action-first triage admission, and stall-recovery contract:
 
+- `references/action-first-triage-admission.md`
 - `references/dispatcher-runtime-drift.md`
 - `references/stall-recovery.md`
 
