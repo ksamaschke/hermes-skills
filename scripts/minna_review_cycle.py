@@ -1281,17 +1281,47 @@ VERDICT_RE = re.compile(r"VERDICT:\s*(APPROVED|CHANGES_REQUESTED|REVIEW-INCOMPLE
 def leaf_verdict(task: dict) -> tuple[str | None, str]:
     """Read the verdict out of a finished leaf's comments/results/runs."""
     parts = [str(task.get("result") or "")]
+    verdict_parts = list(parts)
+    structured_verdicts: list[str] = []
     try:
         detail = hermes(["kanban", "--board", BOARD, "show", task["id"]], as_json=True)
-        parts.append(str(detail.get("latest_summary") or ""))
+        latest_summary = str(detail.get("latest_summary") or "")
+        parts.append(latest_summary)
+        verdict_parts.append(latest_summary)
         for comment in detail.get("comments") or []:
-            parts.append(str(comment.get("body") or ""))
+            body = str(comment.get("body") or "")
+            parts.append(body)
+            verdict_parts.append(body)
         for run in detail.get("runs") or []:
-            parts.append(str(run.get("summary") or ""))
+            summary = str(run.get("summary") or "")
+            parts.append(summary)
+            verdict_parts.append(summary)
+            metadata = run.get("metadata") or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError:
+                    metadata = {}
+            if isinstance(metadata, dict):
+                parts.append(json.dumps(metadata, sort_keys=True))
+                structured = str(metadata.get("verdict") or "").upper()
+                if structured in {"APPROVED", "CHANGES_REQUESTED", "REVIEW-INCOMPLETE"}:
+                    # ``kanban_complete`` stores the terminal verdict in run
+                    # metadata even when its human summary omits the packet's
+                    # final ``VERDICT:`` line. Treat that structured terminal
+                    # field as the machine-readable marker, not as prose.
+                    structured_verdicts.append(structured)
     except Exception as exc:
-        parts.append(f"task detail read failed: {type(exc).__name__}: {exc}")
+        diagnostic = f"task detail read failed: {type(exc).__name__}: {exc}"
+        parts.append(diagnostic)
+        verdict_parts.append(diagnostic)
     blob = "\n".join(part for part in parts if part)
-    hits = VERDICT_RE.findall(blob)
+    if structured_verdicts:
+        return structured_verdicts[-1], blob[-12000:]
+    # Raw metadata is evidence, not a verdict surface. In particular, arbitrary
+    # metadata keys/values containing ``VERDICT: APPROVED`` must not authorize a
+    # merge; only the allowlisted ``metadata.verdict`` field above may do that.
+    hits = VERDICT_RE.findall("\n".join(part for part in verdict_parts if part))
     if not hits:
         return None, blob[-12000:]
     return hits[-1].upper(), blob[-12000:]
