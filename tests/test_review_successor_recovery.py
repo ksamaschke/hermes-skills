@@ -223,6 +223,70 @@ def test_guard_can_supply_durable_budget_fields_missing_from_list_json():
     ) == []
 
 
+def test_invalid_review_packet_in_review_state_is_archived(monkeypatch):
+    marker = "[review-packet-guard]"
+    details = iter(
+        [
+            {"task": {**BROAD_TASK, "status": "review"}, "comments": []},
+            {
+                "task": {**BROAD_TASK, "status": "archived"},
+                "comments": [{"body": f"{marker} quarantined"}],
+            },
+        ]
+    )
+    commands = []
+    comments = []
+
+    monkeypatch.setattr(recovery, "_show", lambda board, task_id: next(details))
+    monkeypatch.setattr(
+        recovery,
+        "_hermes",
+        lambda *args: commands.append(args) or (0, "", ""),
+    )
+    monkeypatch.setattr(
+        recovery,
+        "_comment_once",
+        lambda *args: comments.append(args),
+    )
+
+    result = recovery._block_invalid("board", BROAD_TASK, ["invalid budget"])
+
+    assert result == "quarantined invalid review packet t_broad as archived"
+    assert commands == [("kanban", "--board", "board", "archive", "t_broad")]
+    assert len(comments) == 1
+    assert marker in comments[0][-1]
+
+
+def test_invalid_review_packet_block_race_retries_against_live_running_state(monkeypatch):
+    marker = "[review-packet-guard]"
+    details = iter(
+        [
+            {"task": {**BROAD_TASK, "status": "ready"}, "comments": []},
+            {"task": {**BROAD_TASK, "status": "running"}, "comments": []},
+            {"task": {**BROAD_TASK, "status": "running"}, "comments": []},
+            {
+                "task": {**BROAD_TASK, "status": "blocked"},
+                "comments": [{"body": f"{marker} quarantined"}],
+            },
+        ]
+    )
+    outcomes = iter([(1, "", "cannot block t_broad"), (0, "", "")])
+    commands = []
+
+    monkeypatch.setattr(recovery, "_show", lambda board, task_id: next(details))
+    monkeypatch.setattr(
+        recovery,
+        "_hermes",
+        lambda *args: commands.append(args) or next(outcomes),
+    )
+
+    result = recovery._block_invalid("board", BROAD_TASK, ["invalid budget"])
+
+    assert result == "quarantined invalid review packet t_broad as blocked"
+    assert len(commands) == 2
+    assert all(command[3] == "block" for command in commands)
+
+
 def test_durable_task_fields_read_the_board_row_without_writing(tmp_path, monkeypatch):
     database = tmp_path / "kanban.db"
     with sqlite3.connect(database) as connection:

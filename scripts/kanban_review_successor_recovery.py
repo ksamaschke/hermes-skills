@@ -1207,17 +1207,71 @@ def _block_invalid(board: str, row: dict[str, Any], errors: list[str]) -> str:
     task_id = str(row.get("id") or "")
     marker = "[review-packet-guard]"
     reason = f"{marker} blocked before dispatch: " + "; ".join(errors)
-    code, stdout, stderr = _hermes("kanban", "--board", board, "block", task_id, reason)
-    if code != 0:
-        raise RuntimeError(f"blocking invalid review {task_id} failed: {stderr or stdout}")
-    detail = _show(board, task_id)
-    task = _task_from_detail(detail, row)
-    if str(task.get("status") or "") != "blocked":
-        raise RuntimeError(f"invalid review {task_id} block readback failed")
-    comments = detail.get("comments") or []
-    if not any(marker in str(comment.get("body") or "") for comment in comments if isinstance(comment, dict)):
-        _comment_once(board, task_id, marker, reason)
-    return f"blocked invalid review packet {task_id} before dispatch"
+    last_error = ""
+
+    # The list/read and quarantine write race with review dispatch. `block`
+    # accepts ready/running tasks, but review/todo/scheduled packets must be
+    # archived to leave the dispatch frontier. Re-read before every bounded
+    # attempt and accept only a verified blocked/archived terminal state.
+    for _attempt in range(3):
+        detail = _show(board, task_id)
+        task = _task_from_detail(detail, row)
+        status = str(task.get("status") or "").lower()
+        comments = detail.get("comments") or []
+
+        if status in {"blocked", "archived"}:
+            if not any(
+                marker in str(comment.get("body") or "")
+                for comment in comments
+                if isinstance(comment, dict)
+            ):
+                _comment_once(board, task_id, marker, reason)
+            return f"quarantined invalid review packet {task_id} as {status}"
+
+        if status in {"review", "todo", "scheduled"}:
+            _comment_once(board, task_id, marker, reason)
+            action = "archive"
+            expected = "archived"
+            command = ("kanban", "--board", board, "archive", task_id)
+        elif status in {"ready", "running"}:
+            action = "block"
+            expected = "blocked"
+            command = ("kanban", "--board", board, "block", task_id, reason)
+        else:
+            raise RuntimeError(
+                f"invalid review {task_id} reached non-quarantinable status {status!r}"
+            )
+
+        code, stdout, stderr = _hermes(*command)
+        last_error = stderr or stdout
+        verify = _show(board, task_id)
+        verified_task = _task_from_detail(verify, row)
+        verified_status = str(verified_task.get("status") or "").lower()
+        if verified_status == expected:
+            if not any(
+                marker in str(comment.get("body") or "")
+                for comment in verify.get("comments") or []
+                if isinstance(comment, dict)
+            ):
+                _comment_once(board, task_id, marker, reason)
+            return f"quarantined invalid review packet {task_id} as {expected}"
+        if verified_status in {"blocked", "archived"}:
+            if not any(
+                marker in str(comment.get("body") or "")
+                for comment in verify.get("comments") or []
+                if isinstance(comment, dict)
+            ):
+                _comment_once(board, task_id, marker, reason)
+            return f"quarantined invalid review packet {task_id} as {verified_status}"
+        if code == 0 or verified_status != status:
+            continue
+        raise RuntimeError(
+            f"{action} invalid review {task_id} failed: {last_error}"
+        )
+
+    raise RuntimeError(
+        f"invalid review {task_id} quarantine did not converge: {last_error}"
+    )
 
 
 def guard(board: str, rows: list[dict[str, Any]], *, apply: bool) -> list[str]:
