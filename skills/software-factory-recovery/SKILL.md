@@ -138,13 +138,24 @@ Reconcile counts programmatically. Inspect every root blocker and every task tha
 
 ### 2. Repair the worker execution contract
 
-Interactive profile limits must not silently cap durable Kanban jobs. Add a recognized `kanban.worker_max_turns` config key with a bounded default and pass it after the `chat` subcommand:
+Interactive profile limits must not silently cap durable Kanban jobs. When Hermes source changes are explicitly authorized, add a recognized `kanban.worker_max_turns` config key with a bounded default and pass it after the `chat` subcommand:
 
 ```text
 hermes ... chat --max-turns <kanban.worker_max_turns> -q "work kanban task <id>"
 ```
 
-Register the key in the canonical config defaults/schema, not only in a local YAML file. Keep the interactive profile's `agent.max_turns` unchanged.
+Register the key in the canonical config defaults/schema, not only in a local YAML file. Keep the interactive profile's `agent.max_turns` unchanged. A config warning that `kanban.worker_max_turns` is unrecognized, or a spawned command without `--max-turns`, proves that a YAML-only value is dead configuration.
+
+When Hermes source changes are out of bounds, use an external profile-scoped recovery instead of editing core or raising the normal interactive profile globally:
+
+1. clone the approved worker route into a dedicated non-interactive executor profile for the affected factory/lane;
+2. set that profile's recognized `agent.max_turns` to the explicitly selected bounded worker budget;
+3. pin `platform_toolsets.cli` to the minimum required toolsets and add the supported `no_mcp` sentinel when globally enabled MCP servers must not leak into the worker surface;
+4. remove any unrecognized `kanban.worker_max_turns` entry from that dedicated profile so nobody mistakes it for the active bound;
+5. verify the effective provider/model with a one-shot probe, verify the resolved worker toolsets through the dispatcher's profile resolver, and assign only the affected successor task to this profile;
+6. preserve and archive the failed attempt, use a new idempotency key, and require run/PID/heartbeat plus terminal evidence before calling the recovery effective.
+
+This profile-scoped path is an add-on workaround, not proof that the generic dispatcher contract has been repaired for every profile. Record that limitation and keep unrelated tasks on their configured lanes.
 
 Use the project-managed test environment, not a mixed system interpreter:
 
