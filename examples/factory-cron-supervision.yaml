@@ -33,6 +33,20 @@ controllers:
     observes:
       - live-repository-state
 
+  # This project-owned wrapper invokes forgejo_delivery_controller.py with the
+  # non-secret JSON overlay path. The controller itself performs GETs only and
+  # discovers matching no-PR branches from the live paginated branch inventory;
+  # the overlay contains filters and bounds, not a candidate list.
+  - id: <forgejo-delivery-controller-id>
+    type: deterministic
+    schedule: every 15m
+    no_agent: true
+    script: <forgejo-delivery-controller-wrapper>
+    overlay: <non-secret-forgejo-delivery-overlay-path>
+    deliver: local
+    observes:
+      - forgejo-delivery-state
+
   - id: <scheduler-attempts-incidents-controller-id>
     type: deterministic
     schedule: every 15m
@@ -55,6 +69,7 @@ supervisor:
     - <board-state-controller-id>
     - <tracker-state-controller-id>
     - <repository-state-controller-id>
+    - <forgejo-delivery-controller-id>
     - <scheduler-attempts-incidents-controller-id>
   continuity: true
   workdir: <project-workdir>
@@ -88,6 +103,16 @@ supervisor:
     state. Never emit a passive stalled report while an internal action remains
     available. Do not bypass review, deployment policy, protected paths, or
     non-delegable human decisions.
+
+    Treat the Forgejo delivery observation as telemetry, not proof. When its
+    verified live state is STALLED, create one exact-scope integration or infrastructure-recovery task
+    using the owner profile named by the project overlay, read back its task id, scope, status, and assignee,
+    then stop the tick. Never create duplicate broad recovery work, merge a pull
+    request, edit the overlay to acknowledge a pushed branch, or deploy from
+    controller output. Verify the live Forgejo branch inventory instead. Report the configured implementer
+    and reviewer route as observed. Gate on vendor-family separation only when the project overlay marks it required;
+    preferred and not_required are not framework defects and must not trigger
+    global reviewer-profile changes.
 
     Human delivery is secondary. Send only concise verified progress, completed
     recovery, or one genuine non-delegable decision. Never forward raw

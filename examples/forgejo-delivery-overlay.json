@@ -1,0 +1,80 @@
+{
+  "version": 1,
+  "project": {
+    "board": "<project-board>",
+    "project": "<project-id>",
+    "profiles": {
+      "integration_operator": "<integration-operator-profile>",
+      "release_operator": "<release-operator-profile>",
+      "infrastructure_recovery_operator": "<infrastructure-recovery-profile>"
+    }
+  },
+  "forgejo": {
+    "base_url": "https://forgejo.example.invalid/api/v1",
+    "repository": "example-owner/example-repository",
+    "user_agent": "hermes-factory-delivery-controller/1.0",
+    "accept": "application/json",
+    "credential_helper": {
+      "protocol": "https",
+      "host": "forgejo.example.invalid",
+      "path": "example-owner/example-repository",
+      "cache_path": "~/.hermes/state/forgejo-delivery/example-project-headers.json"
+    }
+  },
+  "branches": {
+    "target_branches": ["main"],
+    "source_prefixes": ["factory/"],
+    "excluded_branches": []
+  },
+  "review": {
+    "vendor_family_separation": "preferred",
+    "implementer": {
+      "profile": "<implementer-profile>",
+      "vendor_family": "<implementer-vendor-family>"
+    },
+    "reviewer": {
+      "profile": "<reviewer-profile>",
+      "vendor_family": "<reviewer-vendor-family>"
+    }
+  },
+  "runners": {
+    "scopes": [
+      {
+        "name": "repository-visible",
+        "kind": "repository",
+        "endpoint": "/repos/{owner}/{repo}/actions/runners",
+        "visible": true
+      },
+      {
+        "name": "organization-diagnostic-only",
+        "kind": "diagnostic",
+        "endpoint": "/orgs/{owner}/actions/runners",
+        "visible": true
+      }
+    ],
+    "required_labels": ["linux-x64"]
+  },
+  "ci": {
+    "required_contexts": ["validate"]
+  },
+  "stale_thresholds": {
+    "open_pr_no_completed_ci_seconds": 3600,
+    "pushed_no_pr_seconds": 3600,
+    "ready_for_integration_seconds": 7200
+  },
+  "pull_requests": {
+    "include_closed": false,
+    "max_open": 100,
+    "max_closed": 500
+  },
+  "limits": {
+    "page_size": 50,
+    "max_pages": 20,
+    "max_branches": 500,
+    "max_branch_commit_lookups": 50,
+    "max_runners_per_scope": 500,
+    "max_statuses_per_commit": 500,
+    "max_text_chars": 256,
+    "max_output_bytes": 65536
+  }
+}

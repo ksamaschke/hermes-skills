@@ -79,6 +79,81 @@ The release operator must not mutate production when deployment mode is
 incomplete/blocked state with the next gate. When deployment is authorized, it
 verifies both the publication handle and the real controller/data-plane state.
 
+## Deterministic Forgejo delivery observation
+
+`scripts/forgejo_delivery_controller.py` is the portable, read-only observation
+layer between source delivery and the one project supervisor. Copy
+`examples/forgejo-delivery-overlay.json`, replace its placeholders with
+project-owned non-secret values, and invoke the controller through a thin
+project wrapper:
+
+```text
+python3 scripts/forgejo_delivery_controller.py --config <project-overlay.json>
+```
+
+The overlay owns the Forgejo API base and repository, Git credential-helper
+input and private cache path, source/target branch filters, exact branch
+exclusions, exact runner visibility endpoints, required runner labels and CI
+contexts, stale thresholds, board/project identity, inventory/output bounds,
+and integration, infrastructure-recovery, and release operator profiles. It
+does not carry a manually maintained candidate list.
+
+Every HTTP request is a `GET` with explicit non-empty `User-Agent` and `Accept`
+headers. Authentication is resolved through `git credential fill`; successful
+headers are cached atomically at mode `0600` for non-interactive cron use and
+credential values are never logged. Open and closed pull requests, live
+repository branches, and every configured runner endpoint are fully paginated
+inside explicit inventory bounds. A bound overrun fails closed rather than
+silently treating a partial page as complete. Closed pull requests are always
+inventoried to suppress branches that already have PR history;
+`pull_requests.include_closed` controls only whether their lifecycle records are
+included in output.
+
+On every tick the live branch inventory is filtered by `source_prefixes`,
+`target_branches`, `excluded_branches`, and the head branch/SHA of every observed
+open or closed pull request. A newly pushed matching branch therefore appears as
+`pushed/no-PR` on the next tick without an overlay edit. Forgejo's branch payload
+normally supplies the head SHA and commit timestamp. When either is unusable,
+the controller performs at most `max_branch_commit_lookups` one-item GET queries
+to `/repos/{owner}/{repo}/commits`; exceeding that bound fails closed before the
+fallback queries begin. The emitted `pushed_at` value is explicitly marked with
+`timestamp_semantics: head-commit`: it is bounded branch-age evidence, not a
+claim that Forgejo exposed the wall-clock push event.
+
+Runner readiness is calculated only from an exact `repository-visible` scope
+whose endpoint resolves to `/repos/{owner}/{repo}/actions/runners` and is queried
+with `visible=true`. Organization or instance scopes may be included as
+diagnostic observations, but an identically named runner there does not satisfy
+repository readiness. Required labels are classified as `active`, `busy`,
+`offline`, or `missing`.
+
+For every open pull request the controller reads the detail resource and the
+head commit's combined status. Its delivery stages include
+`waiting-for-runner`, `waiting-for-CI`, `CI-failed`, and
+`ready-for-integration`. Optional closed-history observation preserves `merged`
+and `closed` without inferring release or source closure. A missing/offline
+required repository-visible runner, failed required CI, or an open pull request
+past the configured no-completed-CI threshold produces `STALLED`. Recent
+pending work remains `ACTIVE`; a repository with no delivery work is
+`IDLE-BY-GATING`.
+
+Review routing is installation policy, not a global framework assumption. The
+overlay records the actual implementer/reviewer profile and vendor-family route
+and sets `vendor_family_separation` to `required`, `preferred`, or `not_required`.
+Only `required` gates delivery when the configured families are equal or
+unknown. `preferred` reports an advisory and `not_required` reports the route
+without treating same-family review as a defect. The controller never creates
+or modifies reviewer profiles and never claims that review itself completed.
+
+The cron job uses `no_agent: true` and `deliver: local`; its job ID is one of the
+supervisor's `context_from` inputs. Controller JSON is still only an
+observation. After verifying live Forgejo and board state, a supervisor that
+confirms `STALLED` creates one exact-scope integration or infrastructure-recovery task,
+uses the owner profile named by the overlay, and reads back the task ID, scope,
+status, and assignee. It creates no broad duplicate and stops that tick. Merge,
+release, issue closure, and deployment remain separate policy-gated operator
+actions with their own readback.
+
 ## Recovery and reporting
 
 The orchestrator creates and dispatches the integration and release handoffs
