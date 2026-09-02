@@ -13,6 +13,49 @@ Task-level `kanban_notify_subs` rows are not part of this policy and should stay
 empty. Do not use `notify-subscribe` as a substitute for dispatcher
 observability.
 
+## Agent-supervised cron topology
+
+Recurring factory supervision has two distinct layers. The deterministic
+controller jobs are evidence producers; one project-level LLM supervisor is the
+only scheduled job that interprets the evidence and decides whether an internal
+factory action is needed.
+
+Deterministic controllers must be explicit `no_agent: true` jobs with
+`deliver: local`. Their stdout is persisted as local job output for later
+inspection. It is not a human report, and it must not be sent directly to
+Matrix, email, or another human channel. A controller may observe board,
+tracker, repository, scheduler-attempt, or scheduler-incident state, but
+**Controller output is an observation, never proof**.
+
+The single project-level LLM supervisor consumes every controller output through
+`context_from` and keeps its own prior result with `continuity: true`. It must
+also have the project workdir, the `terminal`, `file`, and `code_execution`
+toolsets, and the `kanban-factory-operations`, `software-factory-recovery`,
+`factory-reporting`, and `kanban-progress-evidence` skills. The generic shape is
+kept in [`examples/factory-cron-supervision.yaml`](../examples/factory-cron-supervision.yaml).
+
+On every run the supervisor reads all injected controller outputs, including
+scheduler attempts and incidents, the prior supervisor result, and fresh live
+board, tracker, repository, dispatcher, and scheduler state. It reconciles
+those sources before classifying the factory as exactly `ACTIVE`,
+`IDLE-BY-GATING`, or `STALLED`. If the live state is `STALLED` and a bounded
+safe internal recovery is available, the supervisor performs it and reads back
+every mutation before reporting. It must not emit a passive stalled report while
+an internal action remains available. Controller output or a successful cron
+exit is never a substitute for live readback.
+
+Human delivery is secondary. The supervisor sends only concise verified
+progress, completed recovery, or one genuine non-delegable decision. If no
+human action is required, it emits `[SILENT]`; it never forwards raw controller
+output or raw cron logs. Set one project-approved human delivery target and use
+`attach_to_session: true` when that target is conversational.
+
+For a standalone scheduled output that needs one receiving-agent turn,
+`deliver: bot-chat` or `deliver: bot-chat:<profile>` is the supported
+alternative. Do not double-route the same controller through `bot-chat` and an
+existing central supervisor unless that duplication is deliberate and its
+different responsibilities are documented.
+
 ## Operator clarification bridge
 
 Workers and task cards write state and evidence only. They never ask the user
@@ -71,9 +114,9 @@ machine-specific full config files.
 
 ## Central digest contract
 
-The central factory progress digest is the human-facing reporting path. Each
-run reads the live board and dispatcher evidence, applies the human-impact filter
-below, and then reports:
+The project-level supervisor is the central factory progress digest and the
+human-facing reporting path. Each run reads the live board and dispatcher
+evidence, applies the human-impact filter below, and then reports:
 
 Lead every digest with these sections:
 

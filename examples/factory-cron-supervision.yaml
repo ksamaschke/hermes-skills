@@ -1,0 +1,89 @@
+# Generic cron topology for supervising one project-level software factory.
+# Replace angle-bracket values with project-owned, non-secret values. This is a
+# contract example, not a complete user-local Hermes configuration.
+version: 1
+
+# Deterministic controllers produce observations only. Their stdout is persisted
+# locally by deliver: local and is never routed directly to a human channel.
+controllers:
+  - id: <board-state-controller-id>
+    type: deterministic
+    schedule: every 15m
+    no_agent: true
+    script: <board-state-controller-script>
+    deliver: local
+    observes:
+      - live-board-state
+
+  - id: <tracker-state-controller-id>
+    type: deterministic
+    schedule: every 15m
+    no_agent: true
+    script: <tracker-state-controller-script>
+    deliver: local
+    observes:
+      - live-tracker-state
+
+  - id: <repository-state-controller-id>
+    type: deterministic
+    schedule: every 15m
+    no_agent: true
+    script: <repository-state-controller-script>
+    deliver: local
+    observes:
+      - live-repository-state
+
+  - id: <scheduler-attempts-incidents-controller-id>
+    type: deterministic
+    schedule: every 15m
+    no_agent: true
+    script: <scheduler-observation-controller-script>
+    deliver: local
+    observes:
+      - scheduler-attempts
+      - scheduler-incidents
+
+# One LLM supervisor consumes every controller output and its own prior result.
+# The context_from values are the job IDs returned when the controllers are
+# created. Do not create one LLM report job per controller.
+supervisor:
+  id: <project-supervisor-job-id>
+  type: llm
+  schedule: every 30m
+  no_agent: false
+  context_from:
+    - <board-state-controller-id>
+    - <tracker-state-controller-id>
+    - <repository-state-controller-id>
+    - <scheduler-attempts-incidents-controller-id>
+  continuity: true
+  workdir: <project-workdir>
+  enabled_toolsets:
+    - terminal
+    - file
+    - code_execution
+  skills:
+    - kanban-factory-operations
+    - software-factory-recovery
+    - factory-reporting
+    - kanban-progress-evidence
+  prompt: |
+    Read every injected controller output, including scheduler attempts and
+    incidents. Treat each controller output as an observation, never proof.
+    Read the prior supervisor result supplied by continuity, then inspect live
+    board, tracker, repository, dispatcher, and scheduler state yourself.
+    Reconcile those sources before classifying the factory as exactly ACTIVE,
+    IDLE-BY-GATING, or STALLED.
+
+    If the live state is STALLED and a bounded safe internal recovery is
+    available, perform it now. Read back every mutation and re-check the live
+    state. Never emit a passive stalled report while an internal action remains
+    available. Do not bypass review, deployment policy, protected paths, or
+    non-delegable human decisions.
+
+    Human delivery is secondary. Send only concise verified progress, completed
+    recovery, or one genuine non-delegable decision. Never forward raw
+    controller output or raw cron logs. If no human action is required, emit
+    [SILENT].
+  deliver: <human-delivery-target>
+  attach_to_session: true
