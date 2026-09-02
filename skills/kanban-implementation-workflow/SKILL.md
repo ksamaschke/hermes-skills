@@ -323,6 +323,43 @@ Do not run direct `kubectl apply`, Helm mutation, or ad-hoc production rollout w
 
 Completion criterion: rollout evidence matches the declared project policy, not a generic assumption.
 
+## Agent-supervised cron topology
+
+Recurring factory supervision has two separate layers. Deterministic controller
+jobs are evidence producers and one project-level LLM supervisor is the only
+scheduled interpreter. Keep this topology generic and project-owned; the
+reference shape is [`examples/factory-cron-supervision.yaml`](../../examples/factory-cron-supervision.yaml).
+
+Each deterministic controller is an explicit `no_agent: true` job using
+`deliver: local`. Its output is persisted locally and consumed as evidence; it
+does not report to a human channel. Controller output is an observation, never
+proof. A controller may collect live board, tracker, repository, scheduler
+attempt, or scheduler incident state, but the supervisor must verify those
+observations itself.
+
+The one supervisor job uses `context_from` for every controller output and
+`continuity: true` for its prior result. It has the project `workdir`, the
+`terminal`, `file`, and `code_execution` toolsets, and the
+`kanban-factory-operations`, `software-factory-recovery`, `factory-reporting`,
+and `kanban-progress-evidence` skills. Every run reads all injected outputs,
+scheduler attempts/incidents, the prior result, and fresh live board, tracker,
+repository, dispatcher, and scheduler state before classifying `ACTIVE`,
+`IDLE-BY-GATING`, or `STALLED`.
+
+If the live state is `STALLED` and bounded safe internal recovery is available,
+the supervisor performs it and reads back every mutation before reporting. It
+must not emit a passive stalled report while an internal action remains
+available. Human delivery is secondary: send concise verified progress,
+completed recovery, or a genuine non-delegable decision; otherwise emit
+`[SILENT]`. Never forward raw controller output or raw cron logs. Use one
+project-approved human delivery target and `attach_to_session: true` when the
+target is conversational.
+
+For a standalone scheduled output needing one receiving-agent turn, use
+`deliver: bot-chat` or `deliver: bot-chat:<profile>` instead. Do not double-route
+the same controller through `bot-chat` and an existing central supervisor unless
+that duplication is deliberate and documented.
+
 ### 9. Monitor and report
 
 The gateway dispatcher mechanically promotes, claims, spawns, heartbeats, reclaims, retries, and caps work. The orchestrator/HEX drives adaptive routing, architecture, WIP, reviewer assignment, remediation, recovery, and human decisions. Factory-specific mechanical repairs belong in the external add-on `scripts/kanban_factory_recovery.py`, not Hermes core: pin legacy cron snapshots, repair duplicate clean managed worktrees, verify readback, and leave dirty/product/review/human blockers untouched.
@@ -338,7 +375,10 @@ hermes kanban --board <board> runs <id>
 hermes kanban --board <board> log <id>
 ```
 
-For recurring human updates, create a continuity-enabled cron digest and deliver it to a configured gateway home channel. A local CLI/Desktop chat may not accept scheduled delivery.
+For recurring human updates, use the single supervisor topology above: its
+controller inputs remain local, while only the supervisor has the configured
+human delivery target. A local CLI/Desktop chat may not accept scheduled
+delivery.
 
 Every report leads with Decision, Durable action, Progress, Not progressing,
 Why, Boundary, Owner, Evidence, and Next gate. Counts and liveness remain

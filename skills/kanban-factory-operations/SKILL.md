@@ -79,6 +79,39 @@ Dirty or non-managed worktrees, product failures, provider authorization,
 review findings, and deployment decisions remain explicit blockers. Do not
 modify Hermes source for these repairs.
 
+## Agent-supervised cron topology
+
+Use two layers for recurring factory supervision. Deterministic controller jobs
+are evidence producers, not human reports. They run as explicit `no_agent: true`
+jobs with `deliver: local`, which persists their output locally for the central
+supervisor; they do not send raw stdout to a human channel. Controller output is
+an observation, never proof.
+
+One project-level LLM supervisor consumes every controller through
+`context_from` and retains its prior result with `continuity: true`. The
+supervisor must run with the project workdir, `terminal`, `file`, and
+`code_execution` toolsets, and the `kanban-factory-operations`,
+`software-factory-recovery`, `factory-reporting`, and `kanban-progress-evidence`
+skills. The generic job shape is in
+`examples/factory-cron-supervision.yaml`.
+
+Every supervisor run reads all injected controller outputs, scheduler attempts
+and incidents, the prior supervisor result, and fresh live board, tracker,
+repository, dispatcher, and scheduler state. It classifies exactly `ACTIVE`,
+`IDLE-BY-GATING`, or `STALLED`. If `STALLED` has a bounded safe internal repair,
+the supervisor performs it and reads back every mutation; it must not emit a
+passive stalled report while an internal action remains available. A controller
+exit code, PID, or digest is not proof of recovery.
+
+Human delivery is secondary: send only concise verified progress, completed
+recovery, or a genuine non-delegable decision. Emit `[SILENT]` when no human
+action is required, and never forward raw controller output or cron logs. Use
+one human delivery target and `attach_to_session: true` when the target is
+conversational. `deliver: bot-chat` or `deliver: bot-chat:<profile>` is the
+supported alternative for a standalone scheduled output needing one receiving-
+agent turn; do not double-route a controller through bot-chat and an existing
+central supervisor unless deliberate.
+
 ## Review budget protocol
 
 Adversarial code reviews are dispatched as focused, fresh review cards, not as

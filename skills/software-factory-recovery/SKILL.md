@@ -76,6 +76,39 @@ capability gap rather than looping or asking the user to repair the board.
 5. A failed review or timed-out reviewer is incomplete evidence, not human approval or a product blocker.
 6. Requeue internal failures only after changing the cause or task shape. Do not reset counters merely to improve dashboard numbers.
 
+## Agent-supervised cron topology
+
+Keep deterministic controllers and the LLM supervisor separate. A controller is
+an explicit `no_agent: true` evidence job with `deliver: local`; its output is
+persisted locally for supervision and is never a human report. Controller output
+is an observation, never proof. The recovery add-on, board inspector, scheduler
+observer, and repository/tracker observers may all be controllers, but their
+results do not replace live verification.
+
+Use one project-level LLM supervisor with `context_from` containing every
+controller job and `continuity: true` for the previous supervisor result. Give
+it the project `workdir`, `terminal`, `file`, and `code_execution` toolsets, and
+load `kanban-factory-operations`, `software-factory-recovery`,
+`factory-reporting`, and `kanban-progress-evidence`. The generic configuration
+shape is `examples/factory-cron-supervision.yaml`.
+
+Every run reads all injected outputs, including scheduler attempts/incidents,
+the prior result, and fresh live board, tracker, repository, dispatcher, and
+scheduler state. Reconcile them before classifying `ACTIVE`,
+`IDLE-BY-GATING`, or `STALLED`. When `STALLED` has a bounded safe internal
+recovery, act first, read back every mutation, and classify again. Never emit a
+passive stalled report while an internal recovery action remains available.
+
+Human delivery is secondary. Send only concise verified progress, completed
+recovery, or a genuine non-delegable decision; otherwise emit `[SILENT]`. Never
+forward raw controller output or raw cron logs. Configure one human delivery
+target and `attach_to_session: true` when it is conversational.
+
+For a standalone scheduled output that needs one receiving-agent turn,
+`deliver: bot-chat` or `deliver: bot-chat:<profile>` is supported. Do not
+double-route the same controller through bot-chat and an existing central
+supervisor unless the duplication is deliberate and documented.
+
 ## Live recovery procedure
 
 ### 1. Establish a baseline
