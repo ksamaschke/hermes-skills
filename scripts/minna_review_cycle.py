@@ -1003,6 +1003,29 @@ def validate_review_task_record(
     return row
 
 
+def _unblock_if_still_blocked(task_id: str, kind: str) -> dict:
+    """Unblock a new task while tolerating a concurrent dispatcher advance."""
+    row = _task_row(task_id)
+    if row.get("status") != "blocked" or row.get("block_kind"):
+        return row
+    try:
+        hermes(["kanban", "--board", BOARD, "unblock", task_id], timeout=60)
+    except RuntimeError:
+        # The gateway may promote and claim the task between read and write.
+        # Treat the CLI error as benign only when live readback proves that the
+        # task has already advanced beyond blocked/scheduled.
+        back = _task_row(task_id)
+        if back and back.get("status") not in {"blocked", "scheduled"}:
+            return back
+        raise
+    back = _task_row(task_id)
+    if back and back.get("status") in {"blocked", "scheduled"}:
+        raise RuntimeError(
+            f"{kind} task {task_id} remained blocked after unblock readback"
+        )
+    return back
+
+
 def implementation_task_for_pr(pr: dict, tasks: list[dict], rec: dict) -> str:
     if rec.get("rework_card"):
         return str(rec["rework_card"])
@@ -1094,11 +1117,7 @@ def create_review_leaf(
         review_path=review_path,
         expected_parents=[implementation_task],
     )
-    if row.get("status") == "blocked" and not row.get("block_kind"):
-        hermes(["kanban", "--board", BOARD, "unblock", tid], timeout=60)
-        back = _task_row(tid)
-        if back and back.get("status") == "blocked":
-            raise RuntimeError(f"review task {tid} remained blocked after unblock readback")
+    _unblock_if_still_blocked(tid, "review")
     return tid
 
 
@@ -1210,11 +1229,7 @@ Return candidate, leaf task ids, exact coverage, gaps, and exactly one final lin
             hermes(["kanban", "--board", BOARD, "block", tid, reason], timeout=60)
             archive_cycle_task(tid, reason)
         raise RuntimeError("; ".join(errors))
-    if row.get("status") == "blocked" and not row.get("block_kind"):
-        hermes(["kanban", "--board", BOARD, "unblock", tid], timeout=60)
-        back = _task_row(tid)
-        if back and back.get("status") == "blocked":
-            raise RuntimeError(f"fan-in task {tid} remained blocked after unblock readback")
+    _unblock_if_still_blocked(tid, "fan-in")
     return tid
 
 
@@ -1267,11 +1282,7 @@ reason: {reason}
             hermes(["kanban", "--board", BOARD, "block", tid, reason], timeout=60)
             archive_cycle_task(tid, reason)
         raise RuntimeError("; ".join(errors))
-    if row.get("status") == "blocked" and not row.get("block_kind"):
-        hermes(["kanban", "--board", BOARD, "unblock", tid], timeout=60)
-        back = _task_row(tid)
-        if back and back.get("status") == "blocked":
-            raise RuntimeError(f"rework task {tid} remained blocked after unblock readback")
+    _unblock_if_still_blocked(tid, "rework")
     return tid
 
 
