@@ -1335,7 +1335,11 @@ def verify_merged_readback(pr: dict) -> tuple[bool, str]:
     """Verify Forgejo's merged state against the remote target branch."""
     if not pr.get("merged"):
         return False, "pull request is not merged on API readback"
-    merged_sha = str(pr.get("merged_commit_sha") or "")
+    merged_sha = str(
+        pr.get("merged_commit_sha") or pr.get("merge_commit_sha") or ""
+    )
+    if not merged_sha:
+        return False, "pull request API readback omitted the merge commit"
     try:
         remote = subprocess.run(
             ["git", "-C", str(REPO_DIR), "ls-remote", "origin", f"refs/heads/{BASE_BRANCH}"],
@@ -1344,8 +1348,6 @@ def verify_merged_readback(pr: dict) -> tuple[bool, str]:
         if remote.returncode != 0 or not remote.stdout.strip():
             return False, "PR merged in API but target branch remote readback failed"
         remote_sha = remote.stdout.split()[0]
-        if not merged_sha:
-            merged_sha = remote_sha
         if remote_sha != merged_sha:
             subprocess.run(
                 ["git", "-C", str(REPO_DIR), "fetch", "--quiet", "origin",
@@ -1561,6 +1563,69 @@ def reconcile_pending_merges(state: dict, apply: bool, lines: list[str]) -> None
         lines.append(f"PR #{number}: recovered and read back merge {detail[:12]}")
 
 
+def reconcile_merged_source_closures(state: dict, apply: bool, lines: list[str]) -> None:
+    """Close source issues missed by older controller runs.
+
+    Forgejo does not retroactively apply ``Closes`` semantics when recovered PRs
+    are opened after their implementation card completed. Treat the strict
+    trailing ``(#N)`` title convention as the source link, but only mutate that
+    issue after both Forgejo and the remote target branch prove the PR merged.
+    """
+    records = state.setdefault("prs", {}) if apply else state.get("prs", {})
+    for pr in pulls("closed"):
+        if not pr.get("merged"):
+            continue
+        number = int(pr.get("number") or 0)
+        source = source_issue_number(pr)
+        if number <= 0 or source is None:
+            continue
+
+        record = records.get(str(number), {})
+        recorded_source = record.get("source_issue")
+        if recorded_source is not None and int(recorded_source) != source:
+            lines.append(
+                f"PR #{number}: historical source changed from #{recorded_source} to "
+                f"#{source}; closure deferred for manual factory audit"
+            )
+            continue
+        if record.get("source_closed"):
+            continue
+
+        issue_path = f"/repos/{REPO}/issues/{source}"
+        issue = api(issue_path, "GET", None)
+        if str(issue.get("state") or "").lower() == "closed":
+            if apply:
+                record = records.setdefault(str(number), {})
+                record["source_issue"] = source
+                record["source_closed"] = True
+            continue
+
+        verified, merged_sha = verify_merged_readback(pr)
+        if not verified:
+            lines.append(
+                f"PR #{number}: historical source issue #{source} closure deferred — "
+                f"{merged_sha}"
+            )
+            continue
+        if not apply:
+            lines.append(
+                f"PR #{number}: WOULD close historical source issue #{source} "
+                f"after merged readback {merged_sha[:12]}"
+            )
+            continue
+
+        record = records.setdefault(str(number), {})
+        head = str(pr.get("head", {}).get("sha") or "")
+        if head:
+            record.setdefault("head", head)
+        record["source_issue"] = source
+        record["merged"] = merged_sha
+        closed, note = close_source_issue(pr, api_fn=api)
+        lines.append(f"PR #{number}: historical source reconciliation — {note}")
+        if closed:
+            record["source_closed"] = True
+
+
 def close_pending_sources(state: dict, apply: bool, lines: list[str]) -> None:
     for number, rec in state.get("prs", {}).items():
         source = rec.get("source_issue")
@@ -1689,6 +1754,7 @@ def tick(apply: bool) -> int:
     state.setdefault("prs", {})
     lines: list[str] = []
     reconcile_pending_merges(state, apply, lines)
+    reconcile_merged_source_closures(state, apply, lines)
     close_pending_sources(state, apply, lines)
     if apply:
         save_state(state)
