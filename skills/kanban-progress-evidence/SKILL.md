@@ -152,9 +152,40 @@ Keep one row per finding or acceptance gap:
 
 For every timeout, also record the command or worker action, time limit, result, focused checks that passed, replacement owner/task, and closure condition.
 
+## Delivery is not board state
+
+A card's `done` status says nothing about whether its code exists anywhere but a
+worktree. Audit every completed card's repository state directly:
+
+```bash
+git -C "$WORKTREE" status --porcelain          # uncommitted work
+git -C "$WORKTREE" rev-list --count dev..HEAD  # commits of its own
+git ls-remote --heads origin <branch>          # actually pushed
+```
+
+**`git merge-base --is-ancestor <branch> dev` is not a merge test.** It returns
+success for a branch sitting at `dev` HEAD with zero commits of its own, because
+a commit is trivially its own ancestor. A worker that never committed produces
+exactly this shape, so the naive check reports "merged" for work that does not
+exist in history. Always pair it with a non-zero commit count, and confirm the
+remote ref by SHA.
+
+Preserve before you analyze. When completed work is found uncommitted, commit it
+verbatim on its own branch first — that is reversible and stops any checkout,
+worktree prune, or branch reset from destroying it. Exclude build artifacts
+(they may be gitignored on one branch and not another). Only then judge whether
+the content is correct.
+
+A review verdict that lands after the card was closed still counts. Check
+comment timestamps against `completed_at`; a `CHANGES_REQUESTED` filed minutes
+after completion is an unactioned rejection, not history.
+
 ## Pitfalls
 
 - Treating a digest baseline as the start of the unchanged interval.
+- Trusting `git merge-base --is-ancestor` as proof of a merge; it succeeds for a zero-commit branch.
+- Auditing only blocked cards. Silent failure hides in `done`, where nothing raises a diagnostic.
+- Importing tracker items whose label marks them non-actionable; they become permanent blocked cards that farm stale diagnostics.
 - Treating a grouped remediation task as proof that each finding has an acceptance test.
 - Calling a task “done” because it passed focused tests while the required workspace-wide or E2E gate timed out.
 - Retrying a timed-out task creation and silently creating a duplicate.
