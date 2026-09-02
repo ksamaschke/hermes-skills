@@ -455,6 +455,177 @@ class ClosureReadbackTests(unittest.TestCase):
         self.assertFalse(ok)
         self.assertEqual(calls, [])
 
+    def test_historical_merged_pr_is_closed_and_persisted(self) -> None:
+        issue = {"number": 229, "state": "open"}
+        calls = []
+        state = {"prs": {}}
+        lines = []
+        pr = {
+            "number": 243,
+            "title": "serve UI (#229)",
+            "merged": True,
+            "merged_commit_sha": "f" * 40,
+            "head": {"sha": "e" * 40},
+        }
+
+        def fake_api(path, method="GET", payload=None):
+            calls.append((path, method, payload))
+            if method == "PATCH":
+                assert payload is not None
+                issue["state"] = payload["state"]
+            return dict(issue)
+
+        with (
+            mock.patch.object(self.cycle, "pulls", return_value=[pr]),
+            mock.patch.object(self.cycle, "api", side_effect=fake_api),
+            mock.patch.object(
+                self.cycle, "verify_merged_readback", return_value=(True, "f" * 40)
+            ),
+        ):
+            self.cycle.reconcile_merged_source_closures(state, True, lines)
+
+        self.assertEqual(issue["state"], "closed")
+        self.assertEqual(state["prs"]["243"]["source_issue"], 229)
+        self.assertEqual(state["prs"]["243"]["merged"], "f" * 40)
+        self.assertTrue(state["prs"]["243"]["source_closed"])
+        self.assertEqual(
+            [method for _path, method, _payload in calls],
+            ["GET", "GET", "PATCH", "GET"],
+        )
+        self.assertIn("issue #229 closed", lines[0])
+
+    def test_historical_closure_dry_run_does_not_write_or_mutate_state(self) -> None:
+        state = {"prs": {}}
+        lines = []
+        pr = {
+            "number": 243,
+            "title": "serve UI (#229)",
+            "merged": True,
+            "merged_commit_sha": "f" * 40,
+            "head": {"sha": "e" * 40},
+        }
+        calls = []
+
+        def fake_api(path, method="GET", payload=None):
+            calls.append((path, method, payload))
+            return {"number": 229, "state": "open"}
+
+        with (
+            mock.patch.object(self.cycle, "pulls", return_value=[pr]),
+            mock.patch.object(self.cycle, "api", side_effect=fake_api),
+            mock.patch.object(
+                self.cycle, "verify_merged_readback", return_value=(True, "f" * 40)
+            ),
+        ):
+            self.cycle.reconcile_merged_source_closures(state, False, lines)
+
+        self.assertEqual(state, {"prs": {}})
+        self.assertEqual([method for _path, method, _payload in calls], ["GET"])
+        self.assertIn("WOULD close historical source issue #229", lines[0])
+
+    def test_historical_closure_requires_remote_merge_readback(self) -> None:
+        state = {"prs": {}}
+        lines = []
+        pr = {
+            "number": 243,
+            "title": "serve UI (#229)",
+            "merged": True,
+            "head": {"sha": "e" * 40},
+        }
+        calls = []
+
+        def fake_api(path, method="GET", payload=None):
+            calls.append((path, method, payload))
+            return {"number": 229, "state": "open"}
+
+        with (
+            mock.patch.object(self.cycle, "pulls", return_value=[pr]),
+            mock.patch.object(self.cycle, "api", side_effect=fake_api),
+            mock.patch.object(
+                self.cycle,
+                "verify_merged_readback",
+                return_value=(False, "remote target does not contain merge"),
+            ),
+        ):
+            self.cycle.reconcile_merged_source_closures(state, True, lines)
+
+        self.assertEqual(state, {"prs": {}})
+        self.assertEqual([method for _path, method, _payload in calls], ["GET"])
+        self.assertIn("closure deferred", lines[0])
+
+    def test_persisted_historical_closure_is_not_reopened_or_requeried(self) -> None:
+        state = {
+            "prs": {
+                "243": {
+                    "source_issue": 229,
+                    "source_closed": True,
+                }
+            }
+        }
+        pr = {
+            "number": 243,
+            "title": "serve UI (#229)",
+            "merged": True,
+        }
+        with (
+            mock.patch.object(self.cycle, "pulls", return_value=[pr]),
+            mock.patch.object(self.cycle, "api") as api,
+            mock.patch.object(self.cycle, "verify_merged_readback") as verify,
+        ):
+            self.cycle.reconcile_merged_source_closures(state, True, [])
+        api.assert_not_called()
+        verify.assert_not_called()
+
+    def test_historical_issue_already_closed_is_persisted_without_patch(self) -> None:
+        state = {"prs": {}}
+        lines = []
+        pr = {
+            "number": 243,
+            "title": "serve UI (#229)",
+            "merged": True,
+        }
+        calls = []
+
+        def fake_api(path, method="GET", payload=None):
+            calls.append((path, method, payload))
+            return {"number": 229, "state": "closed"}
+
+        with (
+            mock.patch.object(self.cycle, "pulls", return_value=[pr]),
+            mock.patch.object(self.cycle, "api", side_effect=fake_api),
+            mock.patch.object(self.cycle, "verify_merged_readback") as verify,
+        ):
+            self.cycle.reconcile_merged_source_closures(state, True, lines)
+
+        self.assertEqual(
+            state["prs"]["243"],
+            {"source_issue": 229, "source_closed": True},
+        )
+        self.assertEqual([method for _path, method, _payload in calls], ["GET"])
+        verify.assert_not_called()
+        self.assertEqual(lines, [])
+
+    def test_merge_readback_accepts_forgejo_merge_commit_sha_field(self) -> None:
+        merged = "f" * 40
+        remote = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=f"{merged}\trefs/heads/dev\n", stderr=""
+        )
+        with mock.patch.object(self.cycle.subprocess, "run", return_value=remote) as run:
+            ok, detail = self.cycle.verify_merged_readback({
+                "merged": True,
+                "merge_commit_sha": merged,
+            })
+        self.assertTrue(ok, detail)
+        self.assertEqual(detail, merged)
+        self.assertEqual(run.call_count, 1)
+
+    def test_merge_readback_never_infers_a_missing_merge_commit_from_tip(self) -> None:
+        with mock.patch.object(self.cycle.subprocess, "run") as run:
+            ok, detail = self.cycle.verify_merged_readback({"merged": True})
+        self.assertFalse(ok)
+        self.assertIn("merge commit", detail)
+        run.assert_not_called()
+
     def test_merge_request_pins_the_exact_head_and_reads_remote_target(self) -> None:
         head = "e" * 40
         merged = "f" * 40
