@@ -8,6 +8,7 @@ from typing import Any, Dict, Iterable, List, Optional
 
 INDEPENDENT_PROFILES = {"reviewer", "vanillacore-reviewer", "code-reviewer"}
 VALID_VERDICTS = {"APPROVED", "CHANGES_REQUESTED", "REVIEW-INCOMPLETE"}
+NORMALISED_VERDICTS = {verdict.replace("-", "_"): verdict for verdict in VALID_VERDICTS}
 
 
 def _metadata(run: Dict[str, Any]) -> Dict[str, Any]:
@@ -27,7 +28,7 @@ def _metadata(run: Dict[str, Any]) -> Dict[str, Any]:
 
 def _normalise_verdict(value: Any) -> Optional[str]:
     text = str(value or "").strip().upper().replace("-", "_").replace(" ", "_")
-    return text if text in VALID_VERDICTS else None
+    return NORMALISED_VERDICTS.get(text)
 
 
 def _text_verdict(text: str) -> Optional[str]:
@@ -56,8 +57,7 @@ def _event_time(value: Dict[str, Any]) -> float:
 
 def _review_events(detail: Dict[str, Any]) -> List[Dict[str, Any]]:
     task = detail.get("task") or {}
-    body = str(task.get("body") or "").lower()
-    review_task = "review" in str(task.get("title") or "").lower() or "review_type:" in body
+    review_task = _is_review_projection(task, detail)
     events: List[Dict[str, Any]] = []
     for run in detail.get("runs") or []:
         if not isinstance(run, dict):
@@ -98,7 +98,7 @@ def _is_review_projection(task: Dict[str, Any], detail: Dict[str, Any]) -> bool:
     title = str(task_row.get("title") or task.get("title") or "").lower()
     body = str(task_row.get("body") or task.get("body") or "").lower()
     return (
-        title.startswith("review ")
+        re.match(r"^review\s+#\d+\b", title) is not None
         or "review leaf" in title
         or "review synthesis" in title
         or "review continuation" in title

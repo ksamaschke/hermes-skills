@@ -77,6 +77,47 @@ def test_open_issue_with_unfinished_projection_is_not_closure_ready():
     assert result["reason"] == "local work is finished, but independent review is incomplete"
 
 
+def test_metadata_review_incomplete_verdict_stays_fail_closed():
+    projections = [{"id": "t_review", "status": "done"}]
+    details = [
+        {
+            "task": {
+                "id": "t_review",
+                "title": "Review synthesis Forgejo #42",
+                "body": "review_type: bounded fan-in",
+            },
+            "runs": [
+                {
+                    "id": 12,
+                    "profile": "reviewer",
+                    "status": "done",
+                    "outcome": "completed",
+                    "summary": "Terminal review result recorded in structured metadata.",
+                    "metadata": {"verdict": "REVIEW-INCOMPLETE"},
+                    "ended_at": 40,
+                }
+            ],
+            "comments": [],
+        }
+    ]
+
+    result = report.classify_issue(42, projections, details)
+
+    assert result["eligible"] is False
+    assert result["review_verdict"] == "REVIEW-INCOMPLETE"
+    assert result["reason"] == "local work is finished, but independent review is incomplete"
+
+
+def test_review_rework_title_is_not_misclassified_as_review_work():
+    task = {
+        "id": "t_rework",
+        "title": "Review rework Forgejo #42 clean-checkout gate",
+        "body": "implementation_task: t_impl",
+    }
+
+    assert report._is_review_projection(task, {"task": task}) is False
+
+
 def test_active_rework_does_not_report_historical_review_timeouts_as_current_work():
     projections = [
         {"id": "t_impl", "status": "done"},
