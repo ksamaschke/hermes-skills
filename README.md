@@ -136,6 +136,26 @@ install -m 755 scripts/kanban_review_successor_recovery.py ~/.hermes/scripts/kan
 install -m 755 scripts/kanban_review_successor_recovery_cron.py ~/.hermes/scripts/kanban_review_successor_recovery_cron.py
 ```
 
+Forgejo-backed projects can also install the generic read-only delivery
+observer and copy its non-secret overlay template:
+
+```bash
+install -m 755 scripts/forgejo_delivery_controller.py ~/.hermes/scripts/forgejo_delivery_controller.py
+install -m 644 examples/forgejo-delivery-overlay.json ~/.hermes/scripts/<project>-forgejo-delivery.json
+python3 ~/.hermes/scripts/forgejo_delivery_controller.py \
+  --config ~/.hermes/scripts/<project>-forgejo-delivery.json
+```
+
+The observer paginates open and closed pull requests, live repository branches,
+and configured runner scopes, reads combined commit status, and emits bounded
+`ACTIVE`, `IDLE-BY-GATING`, or `STALLED` JSON. Branch prefixes, exact exclusions,
+and inventory limits stay in the overlay; matching newly pushed branches appear
+as `pushed/no-PR` on the next tick without editing it. The observer performs
+GETs only. Schedule a project wrapper as a local `no_agent` controller and feed
+that job into the one project supervisor; see
+[`examples/factory-cron-supervision.yaml`](examples/factory-cron-supervision.yaml)
+and [`docs/factory-delivery-lifecycle.md`](docs/factory-delivery-lifecycle.md).
+
 The repository also carries the deterministic Minna outbound PR controller used
 as a concrete project add-on. Install the controller, its packet validator, and
 the silent cron wrapper together, then copy and adapt the example configuration:
@@ -295,7 +315,9 @@ skills/software-factory-recovery/SKILL.md      autonomous recovery procedure
 scripts/kanban_factory_recovery.py              deterministic recovery add-on
 scripts/kanban_review_successor_recovery.py     review packet guard and recursive successor bridge
 scripts/kanban_review_successor_recovery_cron.py installed no-agent wrapper
+scripts/forgejo_delivery_controller.py          bounded read-only Forgejo delivery observer
 examples/project-policy.yaml                    adaptable tracker policy template
+examples/forgejo-delivery-overlay.json           anonymized observer overlay template
 docs/profile-roles.md                            reusable profile role model
 docs/reviewer-role-contract.md                   project-agnostic reviewer boundary
 docs/profile-environment-contract.md             profile/worktree environment preflight
