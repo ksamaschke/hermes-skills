@@ -421,6 +421,73 @@ class ReviewPacketTests(unittest.TestCase):
         self.assertIn("base-dddddddddddd", " ".join(args))
         self.assertIn("round-2-scope-1", " ".join(args))
 
+    def test_unblock_race_accepts_task_already_claimed_by_dispatcher(self) -> None:
+        with (
+            mock.patch.object(
+                self.cycle,
+                "_task_row",
+                side_effect=[
+                    {"id": "t_leaf", "status": "blocked", "block_kind": None},
+                    {"id": "t_leaf", "status": "running", "block_kind": None},
+                ],
+            ),
+            mock.patch.object(
+                self.cycle,
+                "hermes",
+                side_effect=RuntimeError("cannot unblock t_leaf (not blocked/scheduled?)"),
+            ) as unblock,
+        ):
+            row = self.cycle._unblock_if_still_blocked("t_leaf", "review")
+
+        self.assertEqual(row["status"], "running")
+        unblock.assert_called_once_with(
+            ["kanban", "--board", self.cycle.BOARD, "unblock", "t_leaf"],
+            timeout=60,
+        )
+
+    def test_unblock_race_preserves_real_blocked_failure(self) -> None:
+        with (
+            mock.patch.object(
+                self.cycle,
+                "_task_row",
+                side_effect=[
+                    {"id": "t_leaf", "status": "blocked", "block_kind": None},
+                    {"id": "t_leaf", "status": "blocked", "block_kind": None},
+                ],
+            ),
+            mock.patch.object(
+                self.cycle,
+                "hermes",
+                side_effect=RuntimeError("cannot unblock t_leaf"),
+            ),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "cannot unblock t_leaf"):
+                self.cycle._unblock_if_still_blocked("t_leaf", "review")
+
+    def test_gate_environment_restores_noninteractive_tool_paths(self) -> None:
+        with (
+            mock.patch.dict(
+                self.cycle.CFG,
+                {"gate_path_prefixes": ["~/project-tools"]},
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"PATH": "/usr/bin", "VITE_MINNA_VAULT": "poison"},
+                clear=True,
+            ),
+        ):
+            env = self.cycle._gate_subprocess_env()
+
+        path = env["PATH"].split(os.pathsep)
+        self.assertEqual(path[0], str(Path.home() / "project-tools"))
+        self.assertIn(str(Path.home() / ".cargo" / "bin"), path)
+        self.assertIn(str(Path.home() / ".local" / "bin"), path)
+        self.assertIn("/opt/homebrew/bin", path)
+        self.assertIn("/usr/local/bin", path)
+        self.assertEqual(path[-1], "/usr/bin")
+        self.assertEqual(env["CI"], "1")
+        self.assertNotIn("VITE_MINNA_VAULT", env)
+
 
 class ClosureReadbackTests(unittest.TestCase):
     def setUp(self) -> None:
