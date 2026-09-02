@@ -290,7 +290,7 @@ def task_source_number(task: Dict[str, Any]) -> Optional[int]:
     text = "\n".join([str(task.get("title", "")), str(task.get("body", ""))])
     patterns = [
         r"Forgejo source key:\s*[^#\n]+#(\d+)",
-        r"Source issue:\s*[^\n]*/issues/(\d+)",
+        r"^Source[ _]issue:[ \t]+https?://[^\s/#]+(?:/[^\s/#]+)*/issues/([1-9]\d*)$",
         r"^Forgejo #(\d+):",
     ]
     for pattern in patterns:
