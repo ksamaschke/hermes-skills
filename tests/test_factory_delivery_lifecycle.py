@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import yaml
@@ -15,6 +16,11 @@ WORKFLOW = ROOT / "skills" / "kanban-implementation-workflow" / "SKILL.md"
 PROGRESS = ROOT / "skills" / "kanban-progress-evidence" / "SKILL.md"
 RUNTIME = ROOT / "docs" / "kanban-factory-runtime.md"
 POLICY = ROOT / "examples" / "project-policy.yaml"
+
+
+def _progress_delivery_section() -> str:
+    text = PROGRESS.read_text(encoding="utf-8")
+    return text.split("## Delivery is not board state", 1)[1].split("## Pitfalls", 1)[0]
 
 
 def test_policy_declares_integration_and_release_gates_separately():
@@ -91,3 +97,69 @@ def test_delivery_contract_forbids_inference_from_worker_or_review_state():
     assert "review complete" in text and "integration complete" in text
     assert "deployment" in text
     assert "read back" in text
+
+
+def test_progress_delivery_audit_uses_declared_project_neutral_refs():
+    section = _progress_delivery_section()
+
+    for placeholder in (
+        "<worktree>",
+        "<base-ref>",
+        "<candidate-sha>",
+        "<remote>",
+        "<source-branch>",
+        "<target-branch>",
+        "<merged-sha>",
+    ):
+        assert placeholder in section
+
+    assert "$WORKTREE" not in section
+    assert not re.search(r"\bdev\b", section, re.IGNORECASE)
+    assert not re.search(r"\borigin\b", section, re.IGNORECASE)
+    assert 'rev-list --count "<base-ref>..<candidate-sha>"' in section
+    assert 'ls-remote --heads "<remote>" "refs/heads/<source-branch>"' in section
+    assert "must be greater than zero" in section
+    assert "must equal `<candidate-sha>`" in section
+
+
+def test_progress_delivery_audit_distinguishes_pre_and_post_merge_evidence():
+    section = " ".join(_progress_delivery_section().split())
+
+    assert "Do not require `<target-branch>..<source-branch>` to remain non-zero after merge" in section
+    assert "hosting service's merged-commit readback" in section
+    assert "freshly fetched remote target" in section
+    assert "project policy" in section
+    assert "equality" in section
+    assert "ancestor" in section
+
+
+def test_progress_dirty_work_preservation_is_narrow_and_revalidated():
+    section = " ".join(_progress_delivery_section().split())
+
+    for phrase in (
+        "inventory every dirty and untracked path",
+        "select only the intended files",
+        "generated and build artifacts",
+        "unrelated changes",
+        "scan the selected patch for secrets",
+        "reversible recovery branch and commit",
+        "rerun the candidate gate",
+        "fresh independent review",
+    ):
+        assert phrase in section
+
+    for unsafe_instruction in (
+        "git add -A",
+        "git add --all",
+        "git add .",
+        "commit it verbatim",
+        "commit everything",
+    ):
+        assert unsafe_instruction not in section
+
+
+def test_late_changes_requested_verdict_reopens_the_delivery_path():
+    section = " ".join(_progress_delivery_section().split())
+
+    assert "`CHANGES_REQUESTED` invalidates the earlier closure" in section
+    assert "new gated candidate/rework path" in section

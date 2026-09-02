@@ -152,9 +152,76 @@ Keep one row per finding or acceptance gap:
 
 For every timeout, also record the command or worker action, time limit, result, focused checks that passed, replacement owner/task, and closure condition.
 
+## Delivery is not board state
+
+A card's `done` status says nothing about whether its code exists anywhere but a
+worktree. Before auditing a completed card, resolve and record these placeholders
+from the card and project policy; do not infer them from local defaults:
+
+- `<worktree>` — the absolute candidate worktree path;
+- `<base-ref>` — the immutable base commit SHA recorded when the candidate was
+  created;
+- `<candidate-sha>` — the immutable candidate commit SHA under review;
+- `<remote>` — the declared source-control remote name or URL;
+- `<source-branch>` — the declared candidate branch;
+- `<target-branch>` — the declared integration target branch;
+- `<merged-sha>` — the merged commit returned by the hosting service after
+  integration.
+
+Before merge, inspect the worktree and prove that the candidate contains work
+and is the revision published on the source branch:
+
+```text
+terminal(command='git -C "<worktree>" status --porcelain')
+terminal(command='git -C "<worktree>" rev-list --count "<base-ref>..<candidate-sha>"')
+terminal(command='git -C "<worktree>" ls-remote --heads "<remote>" "refs/heads/<source-branch>"')
+```
+
+The immutable pre-merge commit count must be greater than zero. The remote
+source-branch SHA must equal `<candidate-sha>`; branch existence alone is not
+delivery evidence. A successful
+`git merge-base --is-ancestor "<candidate-sha>" "<base-ref>"` result proves
+nothing useful when both names resolve to the same zero-change commit.
+
+After merge, use integration evidence rather than the pre-merge change count. Do
+not require `<target-branch>..<source-branch>` to remain non-zero after merge: a
+valid integration can make that count zero or delete the source branch. Require
+the hosting service's merged-commit readback, including the
+exact `<merged-sha>` and target branch, then fetch `<target-branch>` from
+`<remote>` and compare against that freshly fetched remote target. Apply the
+project policy's integration strategy using exact SHAs: fast-forward integration
+requires candidate/merge equality; an ancestry-preserving merge requires
+`<candidate-sha>` to be an ancestor of `<merged-sha>`; a permitted squash or
+rebase requires the hosting service's explicit candidate-to-merge linkage rather
+than invented ancestry. In every strategy, `<merged-sha>` must equal or be an
+ancestor of the freshly fetched remote target. A stale local branch or a board
+transition is not a substitute for either readback.
+
+Preserve dirty work narrowly before any checkout, reset, prune, or branch
+replacement. First inventory every dirty and untracked path, then select only
+the intended files for the card. Exclude generated and build artifacts and
+unrelated changes; leave them untouched and record their disposition. Review
+the exact selected diff and scan the selected patch for secrets with the
+project-approved scanner before staging only those paths. If the selection is
+safe, record the original revision and create a reversible recovery branch and
+commit containing only that patch. Treat the recovery commit as a new candidate:
+rerun the candidate gate, create a fresh independent review, and continue through
+the normal integration gates. Preservation never authorizes broad staging,
+destructive cleanup, or review bypass.
+
+A review verdict that lands after the card was closed still counts. Check
+comment timestamps against `completed_at`; `CHANGES_REQUESTED` invalidates the
+earlier closure. Record every finding and create a new gated candidate/rework path
+that must pass implementation, candidate gates, and independent review before
+integration can resume.
+
 ## Pitfalls
 
 - Treating a digest baseline as the start of the unchanged interval.
+- Trusting one `git merge-base --is-ancestor` result as proof of delivery; equal zero-change commits pass, and rewritten integrations need policy-specific hosting-service evidence.
+- Preserving a dirty tree with broad staging or without secret scanning, candidate revalidation, and fresh independent review.
+- Auditing only blocked cards. Silent failure hides in `done`, where nothing raises a diagnostic.
+- Importing tracker items whose label marks them non-actionable; they become permanent blocked cards that farm stale diagnostics.
 - Treating a grouped remediation task as proof that each finding has an acceptance test.
 - Calling a task “done” because it passed focused tests while the required workspace-wide or E2E gate timed out.
 - Retrying a timed-out task creation and silently creating a duplicate.
