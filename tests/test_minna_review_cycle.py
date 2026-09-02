@@ -464,6 +464,30 @@ class ReviewPacketTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "cannot unblock t_leaf"):
                 self.cycle._unblock_if_still_blocked("t_leaf", "review")
 
+    def test_gate_environment_restores_noninteractive_tool_paths(self) -> None:
+        with (
+            mock.patch.dict(
+                self.cycle.CFG,
+                {"gate_path_prefixes": ["~/project-tools"]},
+            ),
+            mock.patch.dict(
+                os.environ,
+                {"PATH": "/usr/bin", "VITE_MINNA_VAULT": "poison"},
+                clear=True,
+            ),
+        ):
+            env = self.cycle._gate_subprocess_env()
+
+        path = env["PATH"].split(os.pathsep)
+        self.assertEqual(path[0], str(Path.home() / "project-tools"))
+        self.assertIn(str(Path.home() / ".cargo" / "bin"), path)
+        self.assertIn(str(Path.home() / ".local" / "bin"), path)
+        self.assertIn("/opt/homebrew/bin", path)
+        self.assertIn("/usr/local/bin", path)
+        self.assertEqual(path[-1], "/usr/bin")
+        self.assertEqual(env["CI"], "1")
+        self.assertNotIn("VITE_MINNA_VAULT", env)
+
 
 class ClosureReadbackTests(unittest.TestCase):
     def setUp(self) -> None:

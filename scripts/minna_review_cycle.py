@@ -380,6 +380,26 @@ def _clean_subprocess_env() -> dict[str, str]:
     return env
 
 
+def _gate_subprocess_env() -> dict[str, str]:
+    """Build a non-interactive gate environment with project tool paths."""
+    env = os.environ.copy()
+    configured = CFG.get("gate_path_prefixes") or []
+    if not isinstance(configured, list):
+        configured = []
+    prefixes = [str(Path(value).expanduser()) for value in configured]
+    prefixes.extend([
+        str(Path.home() / ".cargo" / "bin"),
+        str(Path.home() / ".local" / "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+    ])
+    current = [part for part in env.get("PATH", "").split(os.pathsep) if part]
+    env["PATH"] = os.pathsep.join(dict.fromkeys([*prefixes, *current]))
+    env["CI"] = "1"
+    env.pop("VITE_MINNA_VAULT", None)
+    return env
+
+
 def hermes(args: list[str], *, as_json: bool = False, timeout: int = 120) -> Any:
     env = _clean_subprocess_env()
     cmd = [shutil.which("hermes") or "hermes", *args]
@@ -534,10 +554,7 @@ def run_gate(head_sha: str, branch: str, log_path: Path) -> tuple[bool, list]:
                 f"git clone --branch {branch}", 1, head_sha,
                 f"clone HEAD {head[:12]} != PR head {head_sha[:12]}")]
 
-        env = os.environ.copy()
-        env["PATH"] = f"{Path.home()}/.cargo/bin:{env.get('PATH','')}"
-        env["CI"] = "1"
-        env.pop("VITE_MINNA_VAULT", None)  # poisons App.openVault tests
+        env = _gate_subprocess_env()
 
         deadline = time.monotonic() + GATE_TIMEOUT
         with log_path.open("w") as log:
