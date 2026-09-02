@@ -99,6 +99,14 @@ scheduler state. Reconcile them before classifying `ACTIVE`,
 recovery, act first, read back every mutation, and classify again. Never emit a
 passive stalled report while an internal recovery action remains available.
 
+Supervision is delta-first, not a periodic full audit. Use continuity to limit
+each tick to state that changed or currently gates progress. The default ceiling
+is ten minutes, eight read-only command batches, and one recovery mutation plus
+readback. Do not scan the complete repository/board history, run the product's
+full gate, implement product code, or perform independent review inside the
+supervisor. A larger repair becomes one exact-scope owned factory task whose
+creation is read back before the tick stops.
+
 Human delivery is secondary. Send only concise verified progress, completed
 recovery, or a genuine non-delegable decision; otherwise emit `[SILENT]`. Never
 forward raw controller output or raw cron logs. Configure one human delivery

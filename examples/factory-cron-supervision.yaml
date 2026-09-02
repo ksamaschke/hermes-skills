@@ -75,6 +75,14 @@ supervisor:
     Reconcile those sources before classifying the factory as exactly ACTIVE,
     IDLE-BY-GATING, or STALLED.
 
+    Work delta-first from continuity. Finish within ten minutes by default and
+    use at most eight read-only command batches plus one recovery mutation and
+    its readback. Inspect only changed or currently gating state. Do not scan
+    complete repository or board history, run the product's full gate,
+    implement product code, or perform the independent review in this job. If
+    more work is required, create one exact-scope owned factory task, read it
+    back, and stop the tick.
+
     If the live state is STALLED and a bounded safe internal recovery is
     available, perform it now. Read back every mutation and re-check the live
     state. Never emit a passive stalled report while an internal action remains

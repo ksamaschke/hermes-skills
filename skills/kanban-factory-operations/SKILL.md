@@ -103,6 +103,14 @@ the supervisor performs it and reads back every mutation; it must not emit a
 passive stalled report while an internal action remains available. A controller
 exit code, PID, or digest is not proof of recovery.
 
+Keep each tick delta-first and bounded. Reuse continuity, inspect only state that
+changed or currently gates progress, and finish within ten minutes by default.
+Allow at most eight read-only command batches plus one recovery mutation and its
+readback. A supervisor must not scan complete repository or board history, run
+the product's full gate, implement product code, or perform the independent
+review itself. If a repair exceeds that budget, create one exact-scope factory
+task with an owner and acceptance check, read it back, and stop the tick.
+
 Human delivery is secondary: send only concise verified progress, completed
 recovery, or a genuine non-delegable decision. Emit `[SILENT]` when no human
 action is required, and never forward raw controller output or cron logs. Use
