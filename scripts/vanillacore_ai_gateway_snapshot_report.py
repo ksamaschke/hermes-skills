@@ -32,6 +32,20 @@ def _normalise_verdict(value: Any) -> Optional[str]:
 
 
 def _text_verdict(text: str) -> Optional[str]:
+    explicit = re.match(
+        r"\s*(?:#+\s*)?(?:(?:overall|review)\s+)?verdict\s*[:=-]\s*"
+        r"(APPROVED|CHANGES[- _]REQUESTED|REVIEW[- _]INCOMPLETE)\b",
+        text,
+        re.IGNORECASE,
+    ) or re.match(
+        r"\s*(APPROVED|CHANGES[- _]REQUESTED|REVIEW[- _]INCOMPLETE)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if explicit:
+        verdict = _normalise_verdict(explicit.group(1))
+        if verdict:
+            return verdict
     if re.search(r"\bCHANGES[_ ]REQUESTED\b", text, re.IGNORECASE):
         return "CHANGES_REQUESTED"
     if re.search(r"\bREVIEW[- ]INCOMPLETE\b", text, re.IGNORECASE):
