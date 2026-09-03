@@ -273,6 +273,22 @@ def test_recover_runs_terminal_worker_reconciliation_for_blocked_tasks(monkeypat
     ]
 
 
+def test_recovery_budget_applies_before_terminal_worker_scans(monkeypatch):
+    task = {"id": "t_blocked", "status": "blocked"}
+    monkeypatch.setattr(factory, "_json_command", lambda *args: [task])
+    monkeypatch.setattr(factory, "_repair_cron_pins", lambda dry_run: [])
+    monkeypatch.setattr(factory, "_recovery_budget_seconds", lambda: 0)
+    monkeypatch.setattr(
+        factory,
+        "_reconcile_terminal_worker",
+        lambda *args, **kwargs: pytest.fail("worker scan ran after budget expiry"),
+    )
+
+    assert factory.recover("factory-reaper-test", dry_run=False) == [
+        "recovery budget exhausted; skipped remaining blocked-task repairs"
+    ]
+
+
 def test_cli_timeout_is_converted_to_bounded_failure(monkeypatch):
     def timeout(*args, **kwargs):
         raise subprocess.TimeoutExpired(kwargs.get("args", args[0]), kwargs["timeout"])

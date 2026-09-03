@@ -478,17 +478,21 @@ def recover(board: str, *, dry_run: bool = False) -> list[str]:
     if not isinstance(tasks, list):
         return changes
     blocked_tasks = [task for task in tasks if isinstance(task, dict)]
-    for task in blocked_tasks:
-        change = _reconcile_terminal_worker(board, task, dry_run=dry_run)
-        if change:
-            changes.append(change)
-
     deadline = time.monotonic() + _recovery_budget_seconds()
     budget_reported = False
     for task in blocked_tasks:
         if time.monotonic() >= deadline:
+            changes.append("recovery budget exhausted; skipped remaining blocked-task repairs")
+            budget_reported = True
+            break
+        change = _reconcile_terminal_worker(board, task, dry_run=dry_run)
+        if change:
+            changes.append(change)
+
+    for task in blocked_tasks:
+        if time.monotonic() >= deadline:
             if not budget_reported:
-                changes.append("recovery detail budget exhausted; skipped remaining blocked-task repairs")
+                changes.append("recovery budget exhausted; skipped remaining blocked-task repairs")
                 budget_reported = True
             break
         change = _acknowledge_parked(board, task, dry_run=dry_run)
@@ -496,7 +500,7 @@ def recover(board: str, *, dry_run: bool = False) -> list[str]:
             changes.append(change)
         if time.monotonic() >= deadline:
             if not budget_reported:
-                changes.append("recovery detail budget exhausted; skipped remaining blocked-task repairs")
+                changes.append("recovery budget exhausted; skipped remaining blocked-task repairs")
                 budget_reported = True
             break
         change = _repair_collision(board, task, dry_run=dry_run)
