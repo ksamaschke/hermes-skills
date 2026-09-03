@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import importlib.util
+import sqlite3
 import subprocess
 import sys
 import time
@@ -270,3 +271,40 @@ def test_recover_runs_terminal_worker_reconciliation_for_blocked_tasks(monkeypat
     assert factory.recover("factory-reaper-test", dry_run=False) == [
         "t_blocked: terminal worker reconciliation=reaped"
     ]
+
+
+def test_cli_timeout_is_converted_to_bounded_failure(monkeypatch):
+    def timeout(*args, **kwargs):
+        raise subprocess.TimeoutExpired(kwargs.get("args", args[0]), kwargs["timeout"])
+
+    monkeypatch.setattr(factory.subprocess, "run", timeout)
+    monkeypatch.setenv("HERMES_FACTORY_CLI_TIMEOUT_SECONDS", "7")
+
+    assert factory._run(["hermes", "kanban"])[0:2] == (124, "")
+    assert "7s" in factory._run(["hermes", "kanban"])[2]
+
+
+def test_readonly_task_detail_fallback_uses_only_terminal_identity(tmp_path, monkeypatch):
+    db = tmp_path / "kanban.db"
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "CREATE TABLE tasks (id TEXT, status TEXT, current_run_id INTEGER, "
+        "title TEXT, priority INTEGER, created_at INTEGER)"
+    )
+    conn.execute(
+        "INSERT INTO tasks VALUES (?, ?, ?, ?, ?, ?)",
+        ("t_sqlite", "blocked", None, "blocked task", 1, 1),
+    )
+    conn.commit()
+    conn.close()
+    monkeypatch.setenv("HERMES_KANBAN_DB", str(db))
+    monkeypatch.setattr(
+        factory,
+        "_json_command",
+        lambda *args: (_ for _ in ()).throw(RuntimeError("CLI unavailable")),
+    )
+
+    assert factory._task_detail("factory-reaper-test", "t_sqlite") == {
+        "_readback": "sqlite",
+        "task": {"id": "t_sqlite", "status": "blocked", "current_run_id": None},
+    }
