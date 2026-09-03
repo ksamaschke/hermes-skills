@@ -310,6 +310,17 @@ def test_readonly_task_detail_fallback_uses_only_terminal_identity(tmp_path, mon
     }
 
 
+def test_default_db_path_resolves_the_named_board(tmp_path, monkeypatch):
+    db = tmp_path / ".hermes" / "kanban" / "boards" / "factory-reaper-test" / "kanban.db"
+    db.parent.mkdir(parents=True)
+    db.touch()
+    monkeypatch.delenv("HERMES_KANBAN_DB", raising=False)
+    monkeypatch.setenv("HERMES_REAL_HOME", str(tmp_path))
+
+    assert factory._kanban_db_path("factory-reaper-test") == db
+    assert factory._kanban_db_path("../other-board") is None
+
+
 def _write_proc_record(
     proc_root: Path,
     *,

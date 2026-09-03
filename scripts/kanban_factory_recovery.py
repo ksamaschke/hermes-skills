@@ -71,20 +71,29 @@ def _recovery_budget_seconds() -> float:
     return value
 
 
-def _kanban_db_path() -> Path | None:
+def _kanban_db_path(board: str | None = None) -> Path | None:
     raw = os.environ.get("HERMES_KANBAN_DB", "").strip()
     if raw:
         path = Path(raw).expanduser()
     else:
         real_home = os.environ.get("HERMES_REAL_HOME", "").strip()
-        path = (Path(real_home).expanduser() if real_home else Path.home()) / ".hermes" / "kanban.db"
+        hermes_root = (
+            Path(real_home).expanduser() if real_home else Path.home()
+        ) / ".hermes"
+        board_name = str(board or "").strip()
+        if board_name:
+            if Path(board_name).name != board_name or board_name in {".", ".."}:
+                return None
+            path = hermes_root / "kanban" / "boards" / board_name / "kanban.db"
+        else:
+            path = hermes_root / "kanban.db"
     if not path.exists():
         return None
     return path.resolve(strict=False)
 
 
-def _readonly_task_detail(task_id: str) -> dict[str, Any] | None:
-    path = _kanban_db_path()
+def _readonly_task_detail(task_id: str, board: str | None = None) -> dict[str, Any] | None:
+    path = _kanban_db_path(board)
     if path is None:
         return None
     try:
@@ -114,8 +123,8 @@ def _readonly_task_detail(task_id: str) -> dict[str, Any] | None:
     }
 
 
-def _readonly_blocked_tasks() -> list[dict[str, Any]] | None:
-    path = _kanban_db_path()
+def _readonly_blocked_tasks(board: str | None = None) -> list[dict[str, Any]] | None:
+    path = _kanban_db_path(board)
     if path is None:
         return None
     try:
@@ -238,7 +247,7 @@ def _task_detail(board: str, task_id: str) -> dict[str, Any] | None:
     try:
         value = _json_command("kanban", "--board", board, "show", "--json", task_id)
     except RuntimeError:
-        fallback = _readonly_task_detail(task_id)
+        fallback = _readonly_task_detail(task_id, board)
         if fallback is not None:
             fallback["_readback"] = "sqlite"
         return fallback
@@ -321,7 +330,7 @@ def _reconcile_terminal_worker(
         return None
     # The reaper needs only the current status/run identity. Prefer the
     # query-only row so a locked/hung CLI cannot serialize every blocked task.
-    detail = _readonly_task_detail(task_id) or _task_detail(board, task_id)
+    detail = _readonly_task_detail(task_id, board) or _task_detail(board, task_id)
     if not detail:
         return f"{task_id}: terminal worker readback unavailable"
     row = detail.get("task") or {}
@@ -332,7 +341,7 @@ def _reconcile_terminal_worker(
         detail,
         task_id=task_id,
         board=board,
-        kanban_db=os.environ.get("HERMES_KANBAN_DB"),
+        kanban_db=_kanban_db_path(board),
         refresh=lambda: _task_detail(board, task_id),
         dry_run=dry_run,
         grace_seconds=_worker_reap_grace_seconds(),
@@ -465,7 +474,7 @@ def recover(board: str, *, dry_run: bool = False) -> list[str]:
     try:
         tasks = _json_command("kanban", "--board", board, "list", "--status", "blocked", "--json")
     except RuntimeError:
-        tasks = _readonly_blocked_tasks()
+        tasks = _readonly_blocked_tasks(board)
     if not isinstance(tasks, list):
         return changes
     blocked_tasks = [task for task in tasks if isinstance(task, dict)]
