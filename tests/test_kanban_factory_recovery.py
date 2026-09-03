@@ -308,3 +308,90 @@ def test_readonly_task_detail_fallback_uses_only_terminal_identity(tmp_path, mon
         "_readback": "sqlite",
         "task": {"id": "t_sqlite", "status": "blocked", "current_run_id": None},
     }
+
+
+def _write_proc_record(
+    proc_root: Path,
+    *,
+    pid: int,
+    ppid: int,
+    pgrp: int,
+    session: int,
+    start_time: int,
+    env: dict[str, str] | None,
+) -> None:
+    process_dir = proc_root / str(pid)
+    process_dir.mkdir()
+    fields = ["S", str(ppid), str(pgrp), str(session), *("0" for _ in range(15)), str(start_time)]
+    (process_dir / "stat").write_text(
+        f"{pid} (worker) {' '.join(fields)}", encoding="utf-8"
+    )
+    if env is not None:
+        payload = b"\0".join(f"{key}={value}".encode() for key, value in env.items())
+        (process_dir / "environ").write_bytes(payload + b"\0")
+
+
+def test_unreadable_process_group_member_fails_closed(tmp_path):
+    identity = {
+        reaper.TASK_ENV: "t_unreadable",
+        reaper.BOARD_ENV: "factory-reaper-test",
+    }
+    _write_proc_record(
+        tmp_path,
+        pid=42000,
+        ppid=1,
+        pgrp=42000,
+        session=42000,
+        start_time=10,
+        env=identity,
+    )
+    _write_proc_record(
+        tmp_path,
+        pid=42001,
+        ppid=42000,
+        pgrp=42000,
+        session=42000,
+        start_time=11,
+        env=None,
+    )
+
+    records = reaper.iter_process_records(proc_root=tmp_path)
+    groups, unsafe = reaper._validated_groups(
+        records,
+        task_id="t_unreadable",
+        board="factory-reaper-test",
+        kanban_db=None,
+        current_pid=os.getpid(),
+    )
+
+    assert {record.pid for record in records} == {42000, 42001}
+    assert groups == []
+    assert unsafe == ["session 42000 contains an unbound process"]
+
+
+def test_identity_changing_process_remains_a_reported_survivor(monkeypatch):
+    group = reaper.ProcessGroup(
+        session=43000,
+        pgrp=43000,
+        pids=(43000,),
+        start_times={43000: 12},
+    )
+    survivor = reaper.ProcessRecord(
+        pid=43000,
+        ppid=1,
+        pgrp=43000,
+        session=43000,
+        start_time=12,
+        state="S",
+        env={},
+        env_readable=False,
+    )
+    monkeypatch.setattr(reaper, "read_process_record", lambda *args, **kwargs: survivor)
+
+    assert reaper._live_pids(
+        group,
+        proc_root=Path("/proc"),
+        task_id="t_unreadable",
+        board="factory-reaper-test",
+        kanban_db=None,
+    ) == [43000]

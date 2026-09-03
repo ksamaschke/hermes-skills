@@ -45,6 +45,7 @@ class ProcessRecord:
     start_time: int
     state: str
     env: Mapping[str, str]
+    env_readable: bool = True
 
 
 @dataclass(frozen=True)
@@ -126,8 +127,7 @@ def read_process_record(pid: int, *, proc_root: Path = PROC_ROOT) -> ProcessReco
     if parsed is None:
         return None
     env = _read_environ(process_dir / "environ")
-    if env is None:
-        return None
+    env_readable = env is not None
     ppid, pgrp, session, start_time, state = parsed
     return ProcessRecord(
         pid=pid,
@@ -136,7 +136,8 @@ def read_process_record(pid: int, *, proc_root: Path = PROC_ROOT) -> ProcessReco
         session=session,
         start_time=start_time,
         state=state,
-        env=env,
+        env=env or {},
+        env_readable=env_readable,
     )
 
 
@@ -183,6 +184,8 @@ def process_identity_matches(
 ) -> bool:
     """Require task identity plus at least one exact board binding."""
 
+    if not record.env_readable:
+        return False
     if record.env.get(TASK_ENV, "").strip() != task_id:
         return False
     expected_board = board.strip()
@@ -334,10 +337,12 @@ def _live_pids(
             continue
         if record.start_time != expected_start:
             continue
-        if process_identity_matches(
-            record, task_id=task_id, board=board, kanban_db=kanban_db
-        ):
-            live.append(pid)
+        # Once a group has been signalled, a surviving process remains a
+        # survivor even if it clears or makes its environment unreadable. The
+        # next destructive signal is separately guarded by
+        # ``_snapshot_still_bound``; do not misreport an identity-changing
+        # survivor as exited.
+        live.append(pid)
     return live
 
 
