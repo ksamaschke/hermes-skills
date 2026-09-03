@@ -5,12 +5,138 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "vanillacore_ai_gateway_snapshot_report.py"
 spec = importlib.util.spec_from_file_location("snapshot_report", SCRIPT)
 assert spec is not None and spec.loader is not None
 report = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(report)
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Verdict: APPROVED", "APPROVED"),
+        ("Overall Verdict=APPROVED", "APPROVED"),
+        ("Review Verdict - APPROVED", "APPROVED"),
+        ("# Verdict: APPROVED", "APPROVED"),
+        ("## Overall Verdict = APPROVED", "APPROVED"),
+        ("### Review Verdict - APPROVED", "APPROVED"),
+        ("Verdict: CHANGES REQUESTED", "CHANGES_REQUESTED"),
+        ("Overall Verdict=CHANGES-REQUESTED", "CHANGES_REQUESTED"),
+        ("Review Verdict - REVIEW_INCOMPLETE", "REVIEW-INCOMPLETE"),
+        ("CHANGES_REQUESTED", "CHANGES_REQUESTED"),
+        ("CHANGES-REQUESTED", "CHANGES_REQUESTED"),
+        ("CHANGES REQUESTED", "CHANGES_REQUESTED"),
+        ("REVIEW-INCOMPLETE", "REVIEW-INCOMPLETE"),
+        ("REVIEW_INCOMPLETE", "REVIEW-INCOMPLETE"),
+        ("REVIEW INCOMPLETE", "REVIEW-INCOMPLETE"),
+        ("APPROVED", "APPROVED"),
+        ("APPROVED.", "APPROVED"),
+        ("APPROVED: all checks passed", "APPROVED"),
+        ("APPROVED: candidate is ready", "APPROVED"),
+        ("APPROVED - all checks passed", "APPROVED"),
+        ("APPROVED\nAll checks passed", "APPROVED"),
+        ("Verdict: APPROVED\nThe candidate is ready", "APPROVED"),
+    ],
+)
+def test_text_verdict_accepts_supported_top_level_terminal_forms(text, expected):
+    assert report._text_verdict(text) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (
+            "Verdict: APPROVED\nCHANGES_REQUESTED: current review",
+            "CHANGES_REQUESTED",
+        ),
+        (
+            "CHANGES_REQUESTED: current review\nVerdict: APPROVED",
+            "CHANGES_REQUESTED",
+        ),
+        (
+            "Verdict: APPROVED\nREVIEW-INCOMPLETE: timeout",
+            "REVIEW-INCOMPLETE",
+        ),
+        (
+            "REVIEW_INCOMPLETE: timeout\nVerdict: APPROVED",
+            "REVIEW-INCOMPLETE",
+        ),
+        ("Verdict: APPROVED\nThis result is not approved", None),
+        ("This result is not approved\nVerdict: APPROVED", None),
+        (
+            "REVIEW-INCOMPLETE: timeout\nCHANGES REQUESTED: follow-up\nVerdict: APPROVED",
+            "CHANGES_REQUESTED",
+        ),
+        (
+            "CHANGES_REQUESTED: follow-up\nREVIEW-INCOMPLETE: timeout\nVerdict: APPROVED",
+            "CHANGES_REQUESTED",
+        ),
+    ],
+)
+def test_text_verdict_fail_closed_precedence_and_negation(text, expected):
+    assert report._text_verdict(text) == expected
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'Quoted report says "Verdict: APPROVED"',
+        '"Verdict: APPROVED"',
+        "Historical verdict was APPROVED",
+        "APPROVED was discussed as a possibility",
+        "APPROVED? maybe not",
+        "Is this APPROVED?",
+        "Verdict: APPROVED (unconfirmed)",
+        "Overall Verdict: APPROVED if checks pass",
+        "No approval was recorded",
+        "The review is not approved",
+        "Review completed; no decision recorded.",
+    ],
+)
+def test_text_verdict_rejects_incidental_uncertain_or_missing_approval(text):
+    assert report._text_verdict(text) is None
+
+
+def test_classify_issue_rejects_conflicting_approval_summary():
+    projections = [
+        {"id": "t_impl", "status": "done", "created_at": 10},
+        {"id": "t_review", "status": "done", "created_at": 11},
+    ]
+    details = [
+        {
+            "task": {"id": "t_impl", "title": "Implementation", "body": ""},
+            "runs": [],
+            "comments": [],
+        },
+        {
+            "task": {
+                "id": "t_review",
+                "title": "Review synthesis #42",
+                "body": "review_type: bounded fan-in\nimplementation_task: t_impl",
+            },
+            "runs": [
+                {
+                    "id": 99,
+                    "profile": "reviewer",
+                    "status": "done",
+                    "outcome": "completed",
+                    "summary": "Verdict: APPROVED\nCHANGES_REQUESTED: current review",
+                    "ended_at": 20,
+                }
+            ],
+            "comments": [],
+        },
+    ]
+
+    result = report.classify_issue(42, projections, details)
+
+    assert result["eligible"] is False
+    assert result["review_verdict"] == "CHANGES_REQUESTED"
+
 
 
 def test_done_kanban_projections_with_changes_requested_are_not_closure_ready():

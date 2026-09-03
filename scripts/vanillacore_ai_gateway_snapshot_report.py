@@ -9,6 +9,14 @@ from typing import Any, Dict, Iterable, List, Optional
 INDEPENDENT_PROFILES = {"reviewer", "vanillacore-reviewer", "code-reviewer"}
 VALID_VERDICTS = {"APPROVED", "CHANGES_REQUESTED", "REVIEW-INCOMPLETE"}
 NORMALISED_VERDICTS = {verdict.replace("-", "_"): verdict for verdict in VALID_VERDICTS}
+_UNCERTAIN_APPROVAL = re.compile(
+    r"\?|\b(?:maybe|perhaps|possibly|possibility|potential(?:ly)?|tentative(?:ly)?|"
+    r"uncertain|unclear|unknown|unconfirmed|unverified|question(?:ed|able)?|"
+    r"discuss(?:ed|ion)?|debated?|histor(?:ical|y)|previous(?:ly)?|former(?:ly)?|"
+    r"prior|proposed|pending|conditional(?:ly)?|if|unless|may|might|could|"
+    r"quote(?:d)?|not\s+(?:final|confirmed|verified)|subject\s+to)\b",
+    re.IGNORECASE,
+)
 
 
 def _metadata(run: Dict[str, Any]) -> Dict[str, Any]:
@@ -31,18 +39,46 @@ def _normalise_verdict(value: Any) -> Optional[str]:
     return NORMALISED_VERDICTS.get(text)
 
 
+def _approval_is_uncertain(text: str, verdict_end: int) -> bool:
+    declaration = text[verdict_end:].splitlines()
+    if not declaration:
+        return False
+    return _UNCERTAIN_APPROVAL.search(declaration[0]) is not None
+
+
 def _text_verdict(text: str) -> Optional[str]:
-    if re.search(r"\bCHANGES[_ ]REQUESTED\b", text, re.IGNORECASE):
+    if re.search(r"\bCHANGES[- _]REQUESTED\b", text, re.IGNORECASE):
         return "CHANGES_REQUESTED"
-    if re.search(r"\bREVIEW[- ]INCOMPLETE\b", text, re.IGNORECASE):
+    if re.search(r"\bREVIEW[- _]INCOMPLETE\b", text, re.IGNORECASE):
         return "REVIEW-INCOMPLETE"
     if re.search(
-        r"\b(?:no|not|never|without|un)\s+approval|not\s+approved|unapproved",
+        r"\b(?:no|not|never|without|un)\s+(?:an?\s+)?approval\b"
+        r"|\b(?:not|never)\s+approved\b|\bunapproved\b",
         text,
         re.IGNORECASE,
     ):
         return None
-    if re.search(r"\bAPPROVED\b", text, re.IGNORECASE):
+
+    explicit = re.match(
+        r"\s*(?:#+[ \t]*)?(?:(?:overall|review)[ \t]+)?verdict[ \t]*[:=-][ \t]*"
+        r"(APPROVED|CHANGES[- _]REQUESTED|REVIEW[- _]INCOMPLETE)\b",
+        text,
+        re.IGNORECASE,
+    )
+    if explicit:
+        verdict = _normalise_verdict(explicit.group(1))
+        if verdict != "APPROVED":
+            return verdict
+        if _approval_is_uncertain(text, explicit.end()):
+            return None
+        return "APPROVED"
+
+    leading = re.match(
+        r"\s*(APPROVED)\b(?=[ \t]*(?:[:=-]|\.)|[ \t]*(?:\r?\n|$))",
+        text,
+        re.IGNORECASE,
+    )
+    if leading and not _approval_is_uncertain(text, leading.end()):
         return "APPROVED"
     return None
 
