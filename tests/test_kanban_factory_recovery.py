@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import os
 import importlib.util
 import subprocess
+import sys
+import time
 from pathlib import Path
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
+import kanban_worker_reaper as reaper
 
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "kanban_factory_recovery.py"
@@ -123,3 +131,142 @@ def test_repair_preserves_collision_when_branch_does_not_match(monkeypatch, tmp_
     result = factory._repair_collision("generic-board", task, dry_run=False)
     assert result is not None
     assert "does not match" in result
+
+
+def _terminal_detail(task_id: str, *, current_run_id=None):
+    return {
+        "task": {
+            "id": task_id,
+            "status": "blocked",
+            "current_run_id": current_run_id,
+        }
+    }
+
+
+def _start_task_worker(task_id: str, board: str):
+    # The child deliberately stays alive so the test proves process-group
+    # cleanup, rather than merely observing the Hermes parent exit.
+    script = (
+        "import subprocess, time; "
+        "subprocess.Popen(['sleep', '60']); "
+        "time.sleep(60)"
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "HERMES_KANBAN_TASK": task_id,
+            "HERMES_KANBAN_RUN_ID": "41",
+            "HERMES_KANBAN_BOARD": board,
+            "HERMES_KANBAN_DB": "/tmp/factory-reaper-test-board.db",
+        }
+    )
+    return subprocess.Popen(
+        [sys.executable, "-c", script],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
+
+def _wait_for_task_process(task_id: str, board: str) -> None:
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        records = reaper.iter_process_records()
+        if any(
+            reaper.process_identity_matches(
+                record,
+                task_id=task_id,
+                board=board,
+                kanban_db="/tmp/factory-reaper-test-board.db",
+            )
+            for record in records
+        ):
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"task worker {task_id} did not become visible in procfs")
+
+
+def _kill_task_worker(process):
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, 9)
+    except ProcessLookupError:
+        pass
+    process.wait(timeout=5)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux procfs")
+def test_terminal_blocked_task_reaps_worker_and_live_descendant():
+    task_id = "t_reaper_terminal"
+    board = "factory-reaper-test"
+    process = _start_task_worker(task_id, board)
+    try:
+        _wait_for_task_process(task_id, board)
+        detail = _terminal_detail(task_id)
+        report = factory.reap_terminal_task_workers(
+            detail,
+            task_id=task_id,
+            board=board,
+            kanban_db="/tmp/factory-reaper-test-board.db",
+            refresh=lambda: detail,
+            grace_seconds=1,
+        )
+        assert report["status"] == "reaped"
+        assert report["survivors"] == []
+        process.wait(timeout=5)
+    finally:
+        _kill_task_worker(process)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux procfs")
+def test_reaper_does_not_kill_worker_for_active_run_or_board_mismatch():
+    active_id = "t_reaper_active"
+    active = _start_task_worker(active_id, "factory-reaper-test")
+    mismatched_id = "t_reaper_mismatch"
+    mismatched = _start_task_worker(mismatched_id, "other-board")
+    try:
+        _wait_for_task_process(active_id, "factory-reaper-test")
+        _wait_for_task_process(mismatched_id, "other-board")
+
+        active_detail = _terminal_detail(active_id, current_run_id=41)
+        active_report = factory.reap_terminal_task_workers(
+            active_detail,
+            task_id=active_id,
+            board="factory-reaper-test",
+            kanban_db="/tmp/factory-reaper-test-board.db",
+            refresh=lambda: active_detail,
+        )
+        assert active_report["status"] == "not_applicable"
+        assert active.poll() is None
+
+        mismatch_detail = _terminal_detail(mismatched_id)
+        mismatch_report = factory.reap_terminal_task_workers(
+            mismatch_detail,
+            task_id=mismatched_id,
+            board="factory-reaper-test",
+            kanban_db="/tmp/factory-reaper-test-board.db",
+            refresh=lambda: mismatch_detail,
+        )
+        assert mismatch_report["status"] == "none"
+        assert mismatched.poll() is None
+    finally:
+        _kill_task_worker(active)
+        _kill_task_worker(mismatched)
+
+
+def test_recover_runs_terminal_worker_reconciliation_for_blocked_tasks(monkeypatch):
+    task = {"id": "t_blocked", "status": "blocked"}
+    monkeypatch.setattr(factory, "_json_command", lambda *args: [task])
+    monkeypatch.setattr(
+        factory,
+        "_reconcile_terminal_worker",
+        lambda board, task, dry_run: "t_blocked: terminal worker reconciliation=reaped",
+    )
+    monkeypatch.setattr(factory, "_acknowledge_parked", lambda *args, **kwargs: None)
+    monkeypatch.setattr(factory, "_repair_collision", lambda *args, **kwargs: None)
+    assert factory.recover("factory-reaper-test", dry_run=False) == [
+        "t_blocked: terminal worker reconciliation=reaped"
+    ]

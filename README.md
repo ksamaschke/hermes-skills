@@ -132,6 +132,7 @@ documents:
 
 ```bash
 install -m 755 scripts/kanban_factory_recovery.py ~/.hermes/scripts/kanban_factory_recovery.py
+install -m 755 scripts/kanban_worker_reaper.py ~/.hermes/scripts/kanban_worker_reaper.py
 install -m 755 scripts/kanban_review_successor_recovery.py ~/.hermes/scripts/kanban_review_successor_recovery.py
 install -m 755 scripts/kanban_review_successor_recovery_cron.py ~/.hermes/scripts/kanban_review_successor_recovery_cron.py
 ```
@@ -313,6 +314,7 @@ skills/kanban-progress-evidence/SKILL.md        evidence and closure accounting
 skills/kanban-progress-evidence/references/     closure matrix template
 skills/software-factory-recovery/SKILL.md      autonomous recovery procedure
 scripts/kanban_factory_recovery.py              deterministic recovery add-on
+scripts/kanban_worker_reaper.py                  task-owned terminal worker cleanup
 scripts/kanban_review_successor_recovery.py     review packet guard and recursive successor bridge
 scripts/kanban_review_successor_recovery_cron.py installed no-agent wrapper
 scripts/forgejo_delivery_controller.py          bounded read-only Forgejo delivery observer

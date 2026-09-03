@@ -25,6 +25,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from kanban_worker_reaper import reap_terminal_task_workers
+
 
 _COLLISION_RE = re.compile(
     r"(?:['\"](?P<branch>[^'\"]+)['\"]\s+is already used by worktree at\s+['\"](?P<path>[^'\"]+)['\"]|"
@@ -182,6 +188,57 @@ def _latest_spawn_error(detail: dict[str, Any]) -> str:
     return ""
 
 
+def _worker_reap_grace_seconds() -> float:
+    raw = os.environ.get("HERMES_FACTORY_WORKER_REAP_GRACE_SECONDS", "2").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return 2.0
+    if not 0 <= value <= 30:
+        return 2.0
+    return value
+
+
+def _reconcile_terminal_worker(
+    board: str, task: dict[str, Any], *, dry_run: bool
+) -> str | None:
+    """Remove only a task-owned worker left behind after terminal handoff."""
+
+    task_id = str(task.get("id") or "").strip()
+    if not task_id or task.get("status") != "blocked":
+        return None
+    detail = _task_detail(board, task_id)
+    if not detail:
+        return f"{task_id}: terminal worker readback unavailable"
+    row = detail.get("task") or {}
+    if row.get("status") != "blocked" or row.get("current_run_id") is not None:
+        return None
+
+    report = reap_terminal_task_workers(
+        detail,
+        task_id=task_id,
+        board=board,
+        kanban_db=os.environ.get("HERMES_KANBAN_DB"),
+        refresh=lambda: _task_detail(board, task_id),
+        dry_run=dry_run,
+        grace_seconds=_worker_reap_grace_seconds(),
+    )
+    status = str(report.get("status") or "unknown")
+    if status in {"none", "not_applicable"}:
+        return None
+    fields = []
+    if report.get("pids"):
+        fields.append(f"pids={','.join(str(pid) for pid in report['pids'])}")
+    if report.get("survivors"):
+        fields.append(
+            f"survivors={','.join(str(pid) for pid in report['survivors'])}"
+        )
+    if report.get("reason"):
+        fields.append(f"reason={report['reason']}")
+    suffix = f" ({'; '.join(fields)})" if fields else ""
+    return f"{task_id}: terminal worker reconciliation={status}{suffix}"
+
+
 def _collision(error: str) -> tuple[str, Path] | None:
     match = _COLLISION_RE.search(error)
     if not match:
@@ -297,6 +354,9 @@ def recover(board: str, *, dry_run: bool = False) -> list[str]:
         return changes
     for task in tasks:
         if isinstance(task, dict):
+            change = _reconcile_terminal_worker(board, task, dry_run=dry_run)
+            if change:
+                changes.append(change)
             change = _acknowledge_parked(board, task, dry_run=dry_run)
             if change:
                 changes.append(change)
