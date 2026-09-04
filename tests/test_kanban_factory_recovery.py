@@ -422,3 +422,243 @@ def test_identity_changing_process_remains_a_reported_survivor(monkeypatch):
         board="factory-reaper-test",
         kanban_db=None,
     ) == [43000]
+
+
+def _synthetic_record(
+    task_id: str,
+    *,
+    pid: int = 50000,
+    pgrp: int = 50000,
+    session: int = 50000,
+    start_time: int = 12,
+    board: str = "factory-reaper-test",
+) -> reaper.ProcessRecord:
+    return reaper.ProcessRecord(
+        pid=pid,
+        ppid=1,
+        pgrp=pgrp,
+        session=session,
+        start_time=start_time,
+        state="S",
+        env={reaper.TASK_ENV: task_id, reaper.BOARD_ENV: board},
+    )
+
+
+def _patch_synthetic_process_view(monkeypatch, record):
+    monkeypatch.setattr(reaper, "iter_process_records", lambda **kwargs: [record])
+    monkeypatch.setattr(
+        reaper,
+        "read_process_record",
+        lambda pid, **kwargs: record if pid == record.pid else None,
+    )
+    monkeypatch.setattr(reaper.os, "getpgrp", lambda: 1)
+    monkeypatch.setattr(reaper.os, "getsid", lambda pid: 2)
+
+
+def test_f1_reaper_rejects_missing_initial_task_identity(tmp_path):
+    signals = []
+    report = reaper.reap_terminal_task_workers(
+        {"task": {"status": "blocked", "current_run_id": None}},
+        task_id="t_f1_missing",
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        refresh=lambda: _terminal_detail("t_f1_missing"),
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+    )
+
+    assert report["status"] == "skipped"
+    assert "identity is missing" in report["reason"]
+    assert signals == []
+
+
+def test_f1_reaper_revalidates_task_before_sigterm(monkeypatch, tmp_path):
+    task_id = "t_f1_race"
+    record = _synthetic_record(task_id)
+    _patch_synthetic_process_view(monkeypatch, record)
+    refresh_values = iter(
+        [
+            _terminal_detail(task_id),
+            _terminal_detail(task_id, current_run_id=41),
+        ]
+    )
+    signals = []
+    report = reaper.reap_terminal_task_workers(
+        _terminal_detail(task_id),
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        refresh=lambda: next(refresh_values),
+        grace_seconds=0,
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+        monotonic=lambda: 0,
+    )
+
+    assert report["status"] == "partial"
+    assert "current run" in report["reason"]
+    assert signals == []
+
+
+def test_f1_reaper_rejects_mismatched_refresh_identity(monkeypatch, tmp_path):
+    task_id = "t_f1_mismatch"
+    record = _synthetic_record(task_id)
+    _patch_synthetic_process_view(monkeypatch, record)
+    signals = []
+    report = reaper.reap_terminal_task_workers(
+        _terminal_detail(task_id),
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        refresh=lambda: _terminal_detail("t_other"),
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+    )
+
+    assert report["status"] == "skipped"
+    assert "does not match" in report["reason"]
+    assert signals == []
+
+
+def test_f2_reaper_rejects_malformed_numeric_proc_entry(tmp_path):
+    task_id = "t_f2_malformed"
+    identity = {
+        reaper.TASK_ENV: task_id,
+        reaper.BOARD_ENV: "factory-reaper-test",
+    }
+    _write_proc_record(
+        tmp_path,
+        pid=52000,
+        ppid=1,
+        pgrp=52000,
+        session=52000,
+        start_time=12,
+        env=identity,
+    )
+    malformed = tmp_path / "52001"
+    malformed.mkdir()
+    (malformed / "stat").write_text("not a proc stat", encoding="utf-8")
+    signals = []
+    detail = _terminal_detail(task_id)
+    report = reaper.reap_terminal_task_workers(
+        detail,
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        current_pid=os.getpid(),
+        refresh=lambda: detail,
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+    )
+
+    assert report["status"] == "unsafe"
+    assert "unreadable record 52001" in report["reason"]
+    assert signals == []
+
+
+def test_f2_reaper_rejects_unreadable_captured_member(monkeypatch, tmp_path):
+    task_id = "t_f2_captured"
+    record = _synthetic_record(task_id, pid=53000, pgrp=53000, session=53000)
+    _patch_synthetic_process_view(monkeypatch, record)
+    monkeypatch.setattr(reaper, "read_process_record", lambda *args, **kwargs: None)
+    signals = []
+    detail = _terminal_detail(task_id)
+    report = reaper.reap_terminal_task_workers(
+        detail,
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        refresh=lambda: detail,
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+    )
+
+    assert report["status"] == "partial"
+    assert "could not be read" in report["reason"]
+    assert signals == []
+
+
+def test_f3_reaper_rejects_moved_captured_member(monkeypatch, tmp_path):
+    task_id = "t_f3_moved"
+    captured = _synthetic_record(task_id, pid=54000, pgrp=54000, session=54000)
+    moved = _synthetic_record(task_id, pid=54000, pgrp=54001, session=54000)
+    monkeypatch.setattr(reaper, "iter_process_records", lambda **kwargs: [captured])
+    monkeypatch.setattr(
+        reaper, "read_process_record", lambda *args, **kwargs: moved
+    )
+    monkeypatch.setattr(reaper.os, "getpgrp", lambda: 1)
+    monkeypatch.setattr(reaper.os, "getsid", lambda pid: 2)
+    signals = []
+    detail = _terminal_detail(task_id)
+    report = reaper.reap_terminal_task_workers(
+        detail,
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        refresh=lambda: detail,
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+    )
+
+    assert report["status"] == "partial"
+    assert "changed process group" in report["reason"]
+    assert signals == []
+
+
+def test_f4_reaper_rejects_unknown_caller_session(monkeypatch, tmp_path):
+    task_id = "t_f4_session"
+    record = _synthetic_record(task_id, pid=55000, pgrp=55000, session=55000)
+    _patch_synthetic_process_view(monkeypatch, record)
+    monkeypatch.setattr(
+        reaper.os, "getsid", lambda pid: (_ for _ in ()).throw(PermissionError())
+    )
+    signals = []
+    detail = _terminal_detail(task_id)
+    report = reaper.reap_terminal_task_workers(
+        detail,
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        refresh=lambda: detail,
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+    )
+
+    assert report["status"] == "unsafe"
+    assert "could not determine reaper session" in report["reason"]
+    assert signals == []
+
+
+def test_f5_unsafe_group_never_escalates_to_sigkill(monkeypatch, tmp_path):
+    task_id = "t_f5_authorization"
+    group = reaper.ProcessGroup(
+        session=56000,
+        pgrp=56000,
+        pids=(56000,),
+        start_times={56000: 12},
+    )
+    snapshot_calls = []
+
+    def snapshot(*args, **kwargs):
+        snapshot_calls.append(args[0])
+        if len(snapshot_calls) == 1:
+            return False, "initial validation failed"
+        return True, None
+
+    monkeypatch.setattr(
+        reaper,
+        "_snapshot_still_bound",
+        snapshot,
+    )
+    signals = []
+    signalled, survivors, errors = reaper._terminate_groups(
+        [group],
+        task_id=task_id,
+        board="factory-reaper-test",
+        kanban_db=None,
+        proc_root=tmp_path,
+        grace_seconds=0,
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+        sleep=lambda seconds: None,
+        monotonic=lambda: 0,
+        refresh=lambda: _terminal_detail(task_id),
+    )
+
+    assert signalled == []
+    assert signals == []
+    assert survivors == []
+    assert errors == ["initial validation failed"]
+    assert len(snapshot_calls) == 1

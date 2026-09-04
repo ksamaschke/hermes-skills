@@ -39,13 +39,14 @@ class ProcessRecord:
     """Small, non-sensitive process snapshot used for identity checks."""
 
     pid: int
-    ppid: int
-    pgrp: int
-    session: int
-    start_time: int
-    state: str
+    ppid: int | None
+    pgrp: int | None
+    session: int | None
+    start_time: int | None
+    state: str | None
     env: Mapping[str, str]
     env_readable: bool = True
+    readable: bool = True
 
 
 @dataclass(frozen=True)
@@ -142,22 +143,42 @@ def read_process_record(pid: int, *, proc_root: Path = PROC_ROOT) -> ProcessReco
 
 
 
+def _unknown_process_record(pid: int) -> ProcessRecord:
+    """Represent a numeric procfs entry whose identity could not be read."""
+
+    return ProcessRecord(
+        pid=pid,
+        ppid=None,
+        pgrp=None,
+        session=None,
+        start_time=None,
+        state=None,
+        env={},
+        env_readable=False,
+        readable=False,
+    )
+
+
 def iter_process_records(*, proc_root: Path = PROC_ROOT) -> list[ProcessRecord]:
-    """Return a bounded snapshot of readable processes on a procfs host."""
+    """Return a snapshot, retaining unreadable numeric entries as unknowns."""
 
     if not proc_root.is_dir():
-        return []
+        return [_unknown_process_record(0)]
     records: list[ProcessRecord] = []
     try:
         entries = list(proc_root.iterdir())
     except (FileNotFoundError, PermissionError, OSError):
-        return []
+        return [_unknown_process_record(0)]
     for entry in entries:
         if not entry.name.isdigit():
             continue
-        record = read_process_record(int(entry.name), proc_root=proc_root)
-        if record is not None:
-            records.append(record)
+        try:
+            pid = int(entry.name)
+        except ValueError:
+            records.append(_unknown_process_record(0))
+            continue
+        record = read_process_record(pid, proc_root=proc_root)
+        records.append(record if record is not None else _unknown_process_record(pid))
     return records
 
 
@@ -208,21 +229,60 @@ def process_identity_matches(
 
 
 def _task_row(detail: Mapping[str, Any]) -> Mapping[str, Any]:
+    if not isinstance(detail, Mapping):
+        return {}
     nested = detail.get("task")
     return nested if isinstance(nested, Mapping) else detail
 
 
 
-def _terminal_reason(detail: Mapping[str, Any]) -> str | None:
+def _task_identity_reason(detail: Mapping[str, Any], task_id: str) -> str | None:
+    row = _task_row(detail)
+    value = row.get("id")
+    if not isinstance(value, str) or not value:
+        return "task readback identity is missing"
+    if value != task_id:
+        return "task readback identity does not match requested task"
+    return None
+
+
+def _terminal_reason_for_task(
+    detail: Mapping[str, Any], *, task_id: str | None
+) -> str | None:
+    if task_id is not None:
+        identity_reason = _task_identity_reason(detail, task_id)
+        if identity_reason:
+            return identity_reason
     row = _task_row(detail)
     status = str(row.get("status") or "").strip().lower()
     if status not in TERMINAL_TASK_STATES:
         return f"task status={status or 'unknown'} is not terminal"
-    current_run = row.get("current_run_id")
+    if "current_run_id" not in row:
+        return "task current run state is missing"
+    current_run = row["current_run_id"]
     if current_run not in (None, ""):
         return "task still has a current run"
     return None
 
+
+
+def _terminal_reason(detail: Mapping[str, Any]) -> str | None:
+    return _terminal_reason_for_task(detail, task_id=None)
+
+
+def _record_is_readable(record: ProcessRecord) -> bool:
+    return (
+        isinstance(record, ProcessRecord)
+        and record.readable
+        and isinstance(record.pid, int)
+        and record.pid > 0
+        and isinstance(record.ppid, int)
+        and isinstance(record.pgrp, int)
+        and isinstance(record.session, int)
+        and isinstance(record.start_time, int)
+        and isinstance(record.state, str)
+        and isinstance(record.env, Mapping)
+    )
 
 
 def _validated_groups(
@@ -234,6 +294,15 @@ def _validated_groups(
     current_pid: int,
 ) -> tuple[list[ProcessGroup], list[str]]:
     all_records = list(records)
+    unreadable = [
+        record
+        for record in all_records
+        if not isinstance(record, ProcessRecord) or not _record_is_readable(record)
+    ]
+    if unreadable:
+        first = unreadable[0]
+        pid = getattr(first, "pid", "unknown")
+        return [], [f"process enumeration contains unreadable record {pid}"]
     matching = [
         record
         for record in all_records
@@ -251,11 +320,14 @@ def _validated_groups(
 
     groups: list[ProcessGroup] = []
     unsafe: list[str] = []
-    own_group = os.getpgrp()
+    try:
+        own_group = os.getpgrp()
+    except (ProcessLookupError, PermissionError, OSError):
+        return [], ["could not determine reaper process group"]
     try:
         own_session = os.getsid(current_pid)
     except (ProcessLookupError, PermissionError, OSError):
-        own_session = -1
+        return [], ["could not determine reaper session"]
     for session, members in by_session.items():
         if session <= 1 or session == own_session:
             unsafe.append(f"session {session} is not an isolated worker session")
@@ -298,21 +370,37 @@ def _snapshot_still_bound(
 ) -> tuple[bool, str | None]:
     """Reject PID reuse or a changed process identity before signalling."""
 
+    if set(group.pids) != set(group.start_times):
+        return False, f"process group {group.pgrp} has an incomplete identity snapshot"
     current = {
         pid: read_process_record(pid, proc_root=proc_root) for pid in group.pids
     }
-    for pid, expected_start in group.start_times.items():
+    for pid in group.pids:
+        expected_start = group.start_times[pid]
         record = current.get(pid)
         if record is None:
-            continue
+            return False, f"pid {pid} could not be read during revalidation"
+        if not _record_is_readable(record) or record.pid != pid:
+            return False, f"pid {pid} is unreadable during revalidation"
         if record.start_time != expected_start:
             return False, f"pid {pid} changed start time"
+        if record.session != group.session:
+            return False, f"pid {pid} changed session"
+        if record.pgrp != group.pgrp:
+            return False, f"pid {pid} changed process group"
         if not process_identity_matches(
             record, task_id=task_id, board=board, kanban_db=kanban_db
         ):
             return False, f"pid {pid} changed task identity"
     # A new, unbound member in the same session/group is a fail-closed race.
-    for record in iter_process_records(proc_root=proc_root):
+    enumerated = iter_process_records(proc_root=proc_root)
+    if any(not _record_is_readable(record) for record in enumerated):
+        return False, "process enumeration is incomplete during revalidation"
+    enumerated_by_pid = {record.pid for record in enumerated}
+    missing = [pid for pid in group.pids if pid not in enumerated_by_pid]
+    if missing:
+        return False, f"process enumeration missed captured pid {missing[0]}"
+    for record in enumerated:
         if record.session == group.session and record.pgrp == group.pgrp:
             if not process_identity_matches(
                 record, task_id=task_id, board=board, kanban_db=kanban_db
@@ -330,12 +418,29 @@ def _live_pids(
     board: str,
     kanban_db: str | os.PathLike[str] | None,
 ) -> list[int]:
+    def proc_entry_present(pid: int) -> bool:
+        try:
+            (proc_root / str(pid)).stat()
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return True
+        return True
+
     live: list[int] = []
     for pid, expected_start in group.start_times.items():
         record = read_process_record(pid, proc_root=proc_root)
-        if record is None or record.state == "Z":
+        if record is None:
+            if proc_entry_present(pid):
+                live.append(pid)
+            continue
+        if not _record_is_readable(record) or record.pid != pid:
+            live.append(pid)
+            continue
+        if record.state == "Z":
             continue
         if record.start_time != expected_start:
+            live.append(pid)
             continue
         # Once a group has been signalled, a surviving process remains a
         # survivor even if it clears or makes its environment unreadable. The
@@ -345,6 +450,21 @@ def _live_pids(
         live.append(pid)
     return live
 
+
+
+def _refresh_task_reason(
+    refresh: Callable[[], Mapping[str, Any] | None],
+    *,
+    task_id: str,
+    signal_name: str,
+) -> str | None:
+    try:
+        latest = refresh()
+    except Exception:
+        return f"task readback failed before {signal_name}"
+    if latest is None:
+        return f"task readback disappeared before {signal_name}"
+    return _terminal_reason_for_task(latest, task_id=task_id)
 
 
 def _terminate_groups(
@@ -358,10 +478,12 @@ def _terminate_groups(
     killpg: Callable[[int, int], None],
     sleep: Callable[[float], None],
     monotonic: Callable[[], float],
+    refresh: Callable[[], Mapping[str, Any] | None],
 ) -> tuple[list[int], list[int], list[str]]:
     group_list = list(groups)
     errors: list[str] = []
     term_sent: list[int] = []
+    term_authorized: list[ProcessGroup] = []
     for group in group_list:
         safe, reason = _snapshot_still_bound(
             group,
@@ -373,9 +495,16 @@ def _terminate_groups(
         if not safe:
             errors.append(reason or f"process group {group.pgrp} failed revalidation")
             continue
+        task_reason = _refresh_task_reason(
+            refresh, task_id=task_id, signal_name="SIGTERM"
+        )
+        if task_reason:
+            errors.append(task_reason)
+            continue
         try:
             killpg(group.pgrp, signal.SIGTERM)
             term_sent.append(group.pgrp)
+            term_authorized.append(group)
         except ProcessLookupError:
             # The group already ended; this is an idempotent success.
             pass
@@ -385,7 +514,9 @@ def _terminate_groups(
             errors.append(f"signal failed for process group {group.pgrp}: {exc.errno}")
 
     deadline = monotonic() + max(0.0, grace_seconds)
-    remaining_groups = group_list
+    # Only groups that passed pre-SIGTERM validation and received SIGTERM are
+    # authorized to reach the force-kill phase.
+    remaining_groups = term_authorized
     while remaining_groups and monotonic() < deadline:
         remaining_groups = [
             group
@@ -412,6 +543,12 @@ def _terminate_groups(
         )
         if not safe:
             errors.append(reason or f"process group {group.pgrp} failed kill revalidation")
+            continue
+        task_reason = _refresh_task_reason(
+            refresh, task_id=task_id, signal_name="SIGKILL"
+        )
+        if task_reason:
+            errors.append(task_reason)
             continue
         try:
             killpg(group.pgrp, signal.SIGKILL)
@@ -482,21 +619,23 @@ def reap_terminal_task_workers(
     task_id = task_id.strip()
     if not task_id:
         return {"status": "skipped", "task_id": task_id, "reason": "empty task id"}
-    initial_reason = _terminal_reason(detail)
+    identity_reason = _task_identity_reason(detail, task_id)
+    if identity_reason:
+        return {"status": "skipped", "task_id": task_id, "reason": identity_reason}
+    initial_reason = _terminal_reason_for_task(detail, task_id=task_id)
     if initial_reason:
         return {"status": "not_applicable", "task_id": task_id, "reason": initial_reason}
-    row_task_id = str(_task_row(detail).get("id") or "").strip()
-    if row_task_id and row_task_id != task_id:
-        return {
-            "status": "skipped",
-            "task_id": task_id,
-            "reason": "task readback identity does not match requested task",
-        }
     if not proc_root.is_dir():
         return {
             "status": "unsupported",
             "task_id": task_id,
             "reason": "procfs is unavailable; no process-name fallback is permitted",
+        }
+    if not dry_run and refresh is None:
+        return {
+            "status": "skipped",
+            "task_id": task_id,
+            "reason": "task refresh is required before cleanup",
         }
 
     pid = current_pid if current_pid is not None else os.getpid()
@@ -514,14 +653,21 @@ def reap_terminal_task_workers(
             result.update({"status": "unsafe", "reason": "; ".join(unsafe[:3])})
         return result
 
-    latest = refresh() if refresh is not None else detail
+    try:
+        latest = refresh() if refresh is not None else detail
+    except Exception:
+        return {
+            "status": "skipped",
+            "task_id": task_id,
+            "reason": "task readback failed before cleanup",
+        }
     if latest is None:
         return {
             "status": "skipped",
             "task_id": task_id,
             "reason": "task readback disappeared before cleanup",
         }
-    latest_reason = _terminal_reason(latest)
+    latest_reason = _terminal_reason_for_task(latest, task_id=task_id)
     if latest_reason:
         return {"status": "skipped", "task_id": task_id, "reason": latest_reason}
 
@@ -552,6 +698,7 @@ def reap_terminal_task_workers(
             "process_groups": groups_payload,
         }
 
+    assert refresh is not None
     signalled, survivors, errors = _terminate_groups(
         groups,
         task_id=task_id,
@@ -562,6 +709,7 @@ def reap_terminal_task_workers(
         killpg=killpg,
         sleep=sleep,
         monotonic=monotonic,
+        refresh=refresh,
     )
     result = {
         "status": "reaped" if not survivors and not errors else "partial",
