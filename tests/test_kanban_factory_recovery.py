@@ -148,7 +148,22 @@ def _terminal_detail(task_id: str, *, current_run_id=None):
     }
 
 
-def _start_task_worker(task_id: str, board: str):
+def _create_reaper_test_database(path: Path, task_id: str) -> None:
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute(
+            "CREATE TABLE tasks (id TEXT, status TEXT, current_run_id INTEGER)"
+        )
+        connection.execute(
+            "INSERT INTO tasks VALUES (?, ?, ?)",
+            (task_id, "blocked", None),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def _start_task_worker(task_id: str, board: str, kanban_db: Path):
     # The child deliberately stays alive so the test proves process-group
     # cleanup, rather than merely observing the Hermes parent exit.
     script = (
@@ -162,7 +177,7 @@ def _start_task_worker(task_id: str, board: str):
             "HERMES_KANBAN_TASK": task_id,
             "HERMES_KANBAN_RUN_ID": "41",
             "HERMES_KANBAN_BOARD": board,
-            "HERMES_KANBAN_DB": "/tmp/factory-reaper-test-board.db",
+            "HERMES_KANBAN_DB": str(kanban_db),
         }
     )
     return subprocess.Popen(
@@ -175,7 +190,7 @@ def _start_task_worker(task_id: str, board: str):
     )
 
 
-def _wait_for_task_process(task_id: str, board: str) -> None:
+def _wait_for_task_process(task_id: str, board: str, kanban_db: Path) -> None:
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
         records = reaper.iter_process_records()
@@ -184,7 +199,7 @@ def _wait_for_task_process(task_id: str, board: str) -> None:
                 record,
                 task_id=task_id,
                 board=board,
-                kanban_db="/tmp/factory-reaper-test-board.db",
+                kanban_db=kanban_db,
             )
             for record in records
         ):
@@ -204,18 +219,20 @@ def _kill_task_worker(process):
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux procfs")
-def test_reaper_terminal_cleanup_reaps_worker_and_live_descendant():
+def test_reaper_terminal_cleanup_reaps_worker_and_live_descendant(tmp_path):
     task_id = "t_reaper_terminal"
     board = "factory-reaper-test"
-    process = _start_task_worker(task_id, board)
+    kanban_db = tmp_path / "kanban.db"
+    _create_reaper_test_database(kanban_db, task_id)
+    process = _start_task_worker(task_id, board, kanban_db)
     try:
-        _wait_for_task_process(task_id, board)
+        _wait_for_task_process(task_id, board, kanban_db)
         detail = _terminal_detail(task_id)
         report = factory.reap_terminal_task_workers(
             detail,
             task_id=task_id,
             board=board,
-            kanban_db="/tmp/factory-reaper-test-board.db",
+            kanban_db=kanban_db,
             refresh=lambda: detail,
             grace_seconds=1,
         )
@@ -227,21 +244,22 @@ def test_reaper_terminal_cleanup_reaps_worker_and_live_descendant():
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux procfs")
-def test_reaper_does_not_kill_worker_for_active_run_or_board_mismatch():
+def test_reaper_does_not_kill_worker_for_active_run_or_board_mismatch(tmp_path):
+    kanban_db = tmp_path / "kanban.db"
     active_id = "t_reaper_active"
-    active = _start_task_worker(active_id, "factory-reaper-test")
+    active = _start_task_worker(active_id, "factory-reaper-test", kanban_db)
     mismatched_id = "t_reaper_mismatch"
-    mismatched = _start_task_worker(mismatched_id, "other-board")
+    mismatched = _start_task_worker(mismatched_id, "other-board", kanban_db)
     try:
-        _wait_for_task_process(active_id, "factory-reaper-test")
-        _wait_for_task_process(mismatched_id, "other-board")
+        _wait_for_task_process(active_id, "factory-reaper-test", kanban_db)
+        _wait_for_task_process(mismatched_id, "other-board", kanban_db)
 
         active_detail = _terminal_detail(active_id, current_run_id=41)
         active_report = factory.reap_terminal_task_workers(
             active_detail,
             task_id=active_id,
             board="factory-reaper-test",
-            kanban_db="/tmp/factory-reaper-test-board.db",
+            kanban_db=kanban_db,
             refresh=lambda: active_detail,
         )
         assert active_report["status"] == "not_applicable"
@@ -252,7 +270,7 @@ def test_reaper_does_not_kill_worker_for_active_run_or_board_mismatch():
             mismatch_detail,
             task_id=mismatched_id,
             board="factory-reaper-test",
-            kanban_db="/tmp/factory-reaper-test-board.db",
+            kanban_db=kanban_db,
             refresh=lambda: mismatch_detail,
         )
         assert mismatch_report["status"] == "none"
