@@ -15,6 +15,7 @@ than falling back to broad process-name matching.
 
 from __future__ import annotations
 
+import math
 import os
 import signal
 import time
@@ -29,6 +30,11 @@ RUN_ENV = "HERMES_KANBAN_RUN_ID"
 BOARD_ENV = "HERMES_KANBAN_BOARD"
 DB_ENV = "HERMES_KANBAN_DB"
 IDENTITY_ENV_KEYS = frozenset({TASK_ENV, RUN_ENV, BOARD_ENV, DB_ENV})
+# A caller may request a shorter grace period, but cleanup never waits longer
+# than this fixed bound before force-authorization is considered.
+MAX_GRACE_SECONDS = 30.0
+# Survivor readback is independently bounded after SIGKILL.
+MAX_SURVIVOR_READBACK_SECONDS = 2.0
 TERMINAL_TASK_STATES = frozenset(
     {"archived", "blocked", "cancelled", "done", "failed", "review"}
 )
@@ -195,6 +201,17 @@ def _normalise_path(value: str | os.PathLike[str] | None) -> str | None:
         return text
 
 
+def _canonical_identity_reason(
+    value: Any, *, label: str, allow_empty: bool = False
+) -> str | None:
+    if not isinstance(value, str):
+        return f"{label} is not a string"
+    if not value:
+        return None if allow_empty else f"empty {label}"
+    if value != value.strip():
+        return f"{label} has leading or trailing whitespace"
+    return None
+
 
 def process_identity_matches(
     record: ProcessRecord,
@@ -205,12 +222,23 @@ def process_identity_matches(
 ) -> bool:
     """Require task identity plus at least one exact board binding."""
 
+    if _canonical_identity_reason(task_id, label="task id"):
+        return False
+    if _canonical_identity_reason(board, label="board", allow_empty=True):
+        return False
     if not record.env_readable:
         return False
-    if record.env.get(TASK_ENV, "").strip() != task_id:
+    actual_task = record.env.get(TASK_ENV, "")
+    if not isinstance(actual_task, str) or actual_task != task_id:
         return False
-    expected_board = board.strip()
-    actual_board = record.env.get(BOARD_ENV, "").strip()
+    if actual_task != actual_task.strip():
+        return False
+    expected_board = board
+    actual_board = record.env.get(BOARD_ENV, "")
+    if not isinstance(actual_board, str):
+        return False
+    if actual_board != actual_board.strip():
+        return False
     expected_db = _normalise_path(kanban_db)
     actual_db = _normalise_path(record.env.get(DB_ENV))
 
@@ -231,8 +259,10 @@ def process_identity_matches(
 def _task_row(detail: Mapping[str, Any]) -> Mapping[str, Any]:
     if not isinstance(detail, Mapping):
         return {}
-    nested = detail.get("task")
-    return nested if isinstance(nested, Mapping) else detail
+    if "task" not in detail:
+        return detail
+    nested = detail["task"]
+    return nested if isinstance(nested, Mapping) else {}
 
 
 
@@ -268,6 +298,22 @@ def _terminal_reason_for_task(
 
 def _terminal_reason(detail: Mapping[str, Any]) -> str | None:
     return _terminal_reason_for_task(detail, task_id=None)
+
+
+def _validated_grace_seconds(value: Any) -> tuple[float | None, str | None]:
+    """Return a finite non-negative grace period bounded by the fixed cap."""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None, "grace_seconds must be a finite non-negative number"
+    try:
+        grace_seconds = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None, "grace_seconds must be a finite non-negative number"
+    if not math.isfinite(grace_seconds):
+        return None, "grace_seconds must be a finite non-negative number"
+    if grace_seconds < 0:
+        return None, "grace_seconds must be non-negative"
+    return min(grace_seconds, MAX_GRACE_SECONDS), None
 
 
 def _record_is_readable(record: ProcessRecord) -> bool:
@@ -370,8 +416,18 @@ def _snapshot_still_bound(
 ) -> tuple[bool, str | None]:
     """Reject PID reuse or a changed process identity before signalling."""
 
+    if len(group.pids) != len(set(group.pids)):
+        return False, f"process group {group.pgrp} has duplicate captured pids"
     if set(group.pids) != set(group.start_times):
         return False, f"process group {group.pgrp} has an incomplete identity snapshot"
+    if any(
+        not isinstance(pid, int)
+        or pid <= 0
+        or not isinstance(group.start_times[pid], int)
+        or group.start_times[pid] < 0
+        for pid in group.pids
+    ):
+        return False, f"process group {group.pgrp} has an invalid identity snapshot"
     current = {
         pid: read_process_record(pid, proc_root=proc_root) for pid in group.pids
     }
@@ -396,16 +452,32 @@ def _snapshot_still_bound(
     enumerated = iter_process_records(proc_root=proc_root)
     if any(not _record_is_readable(record) for record in enumerated):
         return False, "process enumeration is incomplete during revalidation"
-    enumerated_by_pid = {record.pid for record in enumerated}
+    enumerated_by_pid: dict[int, ProcessRecord] = {}
+    for record in enumerated:
+        if record.pid in enumerated_by_pid:
+            return False, f"process enumeration contains duplicate pid {record.pid}"
+        enumerated_by_pid[record.pid] = record
     missing = [pid for pid in group.pids if pid not in enumerated_by_pid]
     if missing:
         return False, f"process enumeration missed captured pid {missing[0]}"
+    for pid in group.pids:
+        record = enumerated_by_pid[pid]
+        expected_start = group.start_times[pid]
+        if record.start_time != expected_start:
+            return False, f"pid {pid} changed start time"
+        if record.session != group.session:
+            return False, f"pid {pid} changed session"
+        if record.pgrp != group.pgrp:
+            return False, f"pid {pid} changed process group"
+        if not process_identity_matches(
+            record, task_id=task_id, board=board, kanban_db=kanban_db
+        ):
+            return False, f"pid {pid} changed task identity"
+    captured_pids = set(group.pids)
     for record in enumerated:
         if record.session == group.session and record.pgrp == group.pgrp:
-            if not process_identity_matches(
-                record, task_id=task_id, board=board, kanban_db=kanban_db
-            ):
-                return False, f"process group {group.pgrp} gained an unbound member"
+            if record.pid not in captured_pids:
+                return False, f"process group {group.pgrp} gained an unexpected member"
     return True, None
 
 
@@ -480,6 +552,11 @@ def _terminate_groups(
     monotonic: Callable[[], float],
     refresh: Callable[[], Mapping[str, Any] | None],
 ) -> tuple[list[int], list[int], list[str]]:
+    validated_grace, grace_reason = _validated_grace_seconds(grace_seconds)
+    if grace_reason:
+        return [], [], [grace_reason]
+    assert validated_grace is not None
+    grace_seconds = validated_grace
     group_list = list(groups)
     errors: list[str] = []
     term_sent: list[int] = []
@@ -561,7 +638,9 @@ def _terminate_groups(
             errors.append(f"kill failed for process group {group.pgrp}: {exc.errno}")
 
     if kill_sent:
-        deadline = monotonic() + min(2.0, max(0.2, grace_seconds))
+        deadline = monotonic() + min(
+            MAX_SURVIVOR_READBACK_SECONDS, max(0.2, grace_seconds)
+        )
         while monotonic() < deadline:
             still_live = [
                 pid
@@ -616,9 +695,27 @@ def reap_terminal_task_workers(
     and contain no command lines or arbitrary environment values.
     """
 
-    task_id = task_id.strip()
-    if not task_id:
-        return {"status": "skipped", "task_id": task_id, "reason": "empty task id"}
+    task_identity_reason = _canonical_identity_reason(task_id, label="task id")
+    if task_identity_reason:
+        return {
+            "status": "skipped",
+            "task_id": task_id,
+            "reason": task_identity_reason,
+        }
+    board_identity_reason = _canonical_identity_reason(
+        board, label="board", allow_empty=True
+    )
+    if board_identity_reason:
+        return {
+            "status": "skipped",
+            "task_id": task_id,
+            "reason": board_identity_reason,
+        }
+    validated_grace, grace_reason = _validated_grace_seconds(grace_seconds)
+    if grace_reason:
+        return {"status": "skipped", "task_id": task_id, "reason": grace_reason}
+    assert validated_grace is not None
+    grace_seconds = validated_grace
     identity_reason = _task_identity_reason(detail, task_id)
     if identity_reason:
         return {"status": "skipped", "task_id": task_id, "reason": identity_reason}

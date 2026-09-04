@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 import importlib.util
+import math
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -200,7 +202,7 @@ def _kill_task_worker(process):
 
 
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="requires Linux procfs")
-def test_terminal_blocked_task_reaps_worker_and_live_descendant():
+def test_reaper_terminal_cleanup_reaps_worker_and_live_descendant():
     task_id = "t_reaper_terminal"
     board = "factory-reaper-test"
     process = _start_task_worker(task_id, board)
@@ -396,7 +398,7 @@ def test_unreadable_process_group_member_fails_closed(tmp_path):
     assert unsafe == ["session 42000 contains an unbound process"]
 
 
-def test_identity_changing_process_remains_a_reported_survivor(monkeypatch):
+def test_reaper_identity_changing_process_remains_a_reported_survivor(monkeypatch):
     group = reaper.ProcessGroup(
         session=43000,
         pgrp=43000,
@@ -622,7 +624,7 @@ def test_f4_reaper_rejects_unknown_caller_session(monkeypatch, tmp_path):
     assert signals == []
 
 
-def test_f5_unsafe_group_never_escalates_to_sigkill(monkeypatch, tmp_path):
+def test_reaper_f5_force_authorization_never_escalates_to_sigkill(monkeypatch, tmp_path):
     task_id = "t_f5_authorization"
     group = reaper.ProcessGroup(
         session=56000,
@@ -662,3 +664,251 @@ def test_f5_unsafe_group_never_escalates_to_sigkill(monkeypatch, tmp_path):
     assert survivors == []
     assert errors == ["initial validation failed"]
     assert len(snapshot_calls) == 1
+
+
+def test_reaper_rejects_final_enumeration_pid_reuse_before_signal(monkeypatch, tmp_path):
+    task_id = "t_r1_pid_reuse"
+    group = reaper.ProcessGroup(
+        session=57000,
+        pgrp=57000,
+        pids=(57000,),
+        start_times={57000: 12},
+    )
+    captured = _synthetic_record(
+        task_id,
+        pid=57000,
+        pgrp=57000,
+        session=57000,
+        start_time=12,
+    )
+    replacement = _synthetic_record(
+        task_id,
+        pid=57000,
+        pgrp=57000,
+        session=57000,
+        start_time=99,
+    )
+    monkeypatch.setattr(reaper, "read_process_record", lambda *args, **kwargs: captured)
+    monkeypatch.setattr(
+        reaper, "iter_process_records", lambda **kwargs: [replacement]
+    )
+    monkeypatch.setattr(reaper, "_live_pids", lambda *args, **kwargs: [])
+    signals = []
+
+    signalled, survivors, errors = reaper._terminate_groups(
+        [group],
+        task_id=task_id,
+        board="factory-reaper-test",
+        kanban_db=None,
+        proc_root=tmp_path,
+        grace_seconds=0,
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+        sleep=lambda seconds: None,
+        monotonic=lambda: 0,
+        refresh=lambda: _terminal_detail(task_id),
+    )
+
+    assert signalled == []
+    assert survivors == []
+    assert signals == []
+    assert errors == ["pid 57000 changed start time"]
+
+
+def test_reaper_rejects_malformed_task_envelope_before_procfs(monkeypatch, tmp_path):
+    task_id = "t_r2_malformed_task"
+    monkeypatch.setattr(
+        reaper,
+        "iter_process_records",
+        lambda **kwargs: pytest.fail("malformed task reached procfs"),
+    )
+    signals = []
+
+    report = reaper.reap_terminal_task_workers(
+        {
+            "task": "not-a-row",
+            "id": task_id,
+            "status": "blocked",
+            "current_run_id": None,
+        },
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        refresh=lambda: _terminal_detail(task_id),
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+    )
+
+    assert report["status"] == "skipped"
+    assert "identity is missing" in report["reason"]
+    assert signals == []
+
+
+def test_reaper_accepts_valid_nested_task_row_without_outer_fallback():
+    task_id = "t_r2_nested"
+    detail = {
+        "task": {"id": task_id, "status": "blocked", "current_run_id": None},
+        "id": "t_wrong_outer_row",
+        "status": "running",
+        "current_run_id": 41,
+    }
+
+    assert reaper._task_row(detail) == detail["task"]
+    assert reaper._terminal_reason_for_task(detail, task_id=task_id) is None
+
+
+def test_reaper_accepts_valid_direct_task_row_when_task_is_absent():
+    task_id = "t_r2_direct"
+    detail = {"id": task_id, "status": "blocked", "current_run_id": None}
+
+    assert reaper._task_row(detail) == detail
+    assert reaper._terminal_reason_for_task(detail, task_id=task_id) is None
+
+
+@pytest.mark.parametrize(
+    "grace_seconds",
+    [math.inf, math.nan, "not-a-number", None, -1.0],
+)
+def test_reaper_rejects_invalid_grace_seconds_before_procfs(
+    monkeypatch, tmp_path, grace_seconds
+):
+    task_id = "t_r3_invalid_grace"
+    monkeypatch.setattr(
+        reaper,
+        "iter_process_records",
+        lambda **kwargs: pytest.fail("invalid grace reached procfs"),
+    )
+    signals = []
+
+    report = reaper.reap_terminal_task_workers(
+        _terminal_detail(task_id),
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        refresh=lambda: _terminal_detail(task_id),
+        grace_seconds=grace_seconds,
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+    )
+
+    assert report["status"] == "skipped"
+    assert "grace_seconds" in report["reason"]
+    assert signals == []
+
+
+@pytest.mark.parametrize(
+    ("grace_seconds", "expected"),
+    [
+        (0, 0.0),
+        (2.5, 2.5),
+        (reaper.MAX_GRACE_SECONDS + 1, reaper.MAX_GRACE_SECONDS),
+    ],
+)
+def test_reaper_validates_and_caps_finite_grace_seconds(grace_seconds, expected):
+    assert reaper._validated_grace_seconds(grace_seconds) == (expected, None)
+
+
+def test_reaper_caps_oversized_grace_before_force_kill(monkeypatch, tmp_path):
+    task_id = "t_r3_oversized_grace"
+    group = reaper.ProcessGroup(
+        session=58000,
+        pgrp=58000,
+        pids=(58000,),
+        start_times={58000: 12},
+    )
+    clock = {"now": 0.0}
+    phase = {"killed": False}
+    sleeps = []
+    signals = []
+
+    monkeypatch.setattr(reaper, "_snapshot_still_bound", lambda *args, **kwargs: (True, None))
+    monkeypatch.setattr(
+        reaper,
+        "_live_pids",
+        lambda *args, **kwargs: [] if phase["killed"] else [58000],
+    )
+
+    def killpg(pgrp, signum):
+        signals.append((pgrp, signum))
+        if signum == signal.SIGKILL:
+            phase["killed"] = True
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        clock["now"] += seconds
+
+    signalled, survivors, errors = reaper._terminate_groups(
+        [group],
+        task_id=task_id,
+        board="factory-reaper-test",
+        kanban_db=None,
+        proc_root=tmp_path,
+        grace_seconds=reaper.MAX_GRACE_SECONDS + 1,
+        killpg=killpg,
+        sleep=sleep,
+        monotonic=lambda: clock["now"],
+        refresh=lambda: _terminal_detail(task_id),
+    )
+
+    assert signalled == [58000, 58000]
+    assert signals == [(58000, signal.SIGTERM), (58000, signal.SIGKILL)]
+    assert survivors == []
+    assert errors == []
+    assert sum(sleeps) <= reaper.MAX_GRACE_SECONDS + 1e-6
+
+
+@pytest.mark.parametrize(
+    ("task_id", "board", "reason_fragment"),
+    [
+        ("t_r4_task ", "factory-reaper-test", "task id"),
+        ("t_r4_board", "factory-reaper-test ", "board"),
+    ],
+)
+def test_reaper_rejects_noncanonical_caller_identity_before_procfs(
+    monkeypatch, tmp_path, task_id, board, reason_fragment
+):
+    canonical_task_id = "t_r4_task" if reason_fragment == "task id" else "t_r4_board"
+    monkeypatch.setattr(
+        reaper,
+        "iter_process_records",
+        lambda **kwargs: pytest.fail("noncanonical identity reached procfs"),
+    )
+
+    report = reaper.reap_terminal_task_workers(
+        _terminal_detail(canonical_task_id),
+        task_id=task_id,
+        board=board,
+        proc_root=tmp_path,
+        refresh=lambda: _terminal_detail(canonical_task_id),
+    )
+
+    assert report["status"] == "skipped"
+    assert reason_fragment in report["reason"]
+
+
+@pytest.mark.parametrize(
+    ("env_key", "env_value"),
+    [
+        (reaper.TASK_ENV, "t_r4_process "),
+        (reaper.BOARD_ENV, "factory-reaper-test "),
+    ],
+)
+def test_reaper_rejects_whitespace_normalized_process_identity(env_key, env_value):
+    task_id = "t_r4_process"
+    board = "factory-reaper-test"
+    env = {reaper.TASK_ENV: task_id, reaper.BOARD_ENV: board}
+    env[env_key] = env_value
+    record = _synthetic_record(task_id, board=board)
+    record = reaper.ProcessRecord(
+        pid=record.pid,
+        ppid=record.ppid,
+        pgrp=record.pgrp,
+        session=record.session,
+        start_time=record.start_time,
+        state=record.state,
+        env=env,
+    )
+
+    assert not reaper.process_identity_matches(
+        record,
+        task_id=task_id,
+        board=board,
+        kanban_db=None,
+    )
