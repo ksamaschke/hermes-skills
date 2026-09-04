@@ -1032,6 +1032,20 @@ def _terminate_groups(
             group_safe = True
             for pid in group.pids:
                 handle = handles[pid]
+                safe, reason = _snapshot_still_bound(
+                    group,
+                    task_id=task_id,
+                    board=board,
+                    kanban_db=kanban_db,
+                    proc_root=proc_root,
+                    handles=handles,
+                )
+                if not safe:
+                    add_error(
+                        reason or f"process group {group.pgrp} changed before SIGTERM"
+                    )
+                    group_safe = False
+                    break
                 try:
                     send_fn(handle.fd, signal.SIGTERM)
                     signalled_pids.append(pid)
@@ -1114,6 +1128,20 @@ def _terminate_groups(
             group_safe = True
             for pid in group.pids:
                 handle = handles[pid]
+                safe, reason = _snapshot_still_bound(
+                    group,
+                    task_id=task_id,
+                    board=board,
+                    kanban_db=kanban_db,
+                    proc_root=proc_root,
+                    handles=handles,
+                )
+                if not safe:
+                    add_error(
+                        reason or f"process group {group.pgrp} changed before SIGKILL"
+                    )
+                    group_safe = False
+                    break
                 try:
                     send_fn(handle.fd, signal.SIGKILL)
                     kill_sent.append(pid)

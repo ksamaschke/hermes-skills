@@ -763,6 +763,126 @@ def test_reaper_rejects_final_enumeration_pid_reuse_before_signal(monkeypatch, t
     assert errors == ["pid 57000 changed start time"]
 
 
+def test_reaper_does_not_sigterm_later_member_after_identity_loss(
+    monkeypatch, tmp_path
+):
+    task_id = "t_r1_term_member_identity_loss"
+    first = _synthetic_record(task_id, pid=64000, pgrp=64000, session=64000)
+    second = _synthetic_record(task_id, pid=64001, pgrp=64000, session=64000)
+    current = {first.pid: first, second.pid: second}
+    signals = []
+
+    monkeypatch.setattr(
+        reaper, "iter_process_records", lambda **kwargs: list(current.values())
+    )
+    monkeypatch.setattr(
+        reaper,
+        "read_process_record",
+        lambda pid, **kwargs: current.get(pid),
+    )
+
+    def send(fd, signum):
+        signals.append((fd, signum))
+        if fd == first.pid and signum == signal.SIGTERM:
+            current[second.pid] = reaper.ProcessRecord(
+                pid=second.pid,
+                ppid=second.ppid,
+                pgrp=second.pgrp,
+                session=second.session,
+                start_time=second.start_time,
+                state=second.state,
+                env={},
+            )
+
+    signalled, survivors, errors = reaper._terminate_groups(
+        [
+            reaper.ProcessGroup(
+                session=first.session,
+                pgrp=first.pgrp,
+                pids=(first.pid, second.pid),
+                start_times={first.pid: first.start_time, second.pid: second.start_time},
+            )
+        ],
+        task_id=task_id,
+        board="factory-reaper-test",
+        kanban_db=None,
+        proc_root=tmp_path,
+        grace_seconds=0,
+        pidfd_open=lambda pid: pid,
+        pidfd_send_signal=send,
+        close_handle=lambda fd: None,
+        refresh=lambda: _terminal_detail(task_id),
+        sleep=lambda seconds: None,
+        monotonic=lambda: 0,
+    )
+
+    assert signalled == [first.pid]
+    assert signals == [(first.pid, signal.SIGTERM)]
+    assert second.pid in survivors
+    assert errors == [f"pid {second.pid} changed task identity"]
+
+
+def test_reaper_does_not_sigkill_later_member_after_identity_rebind(
+    monkeypatch, tmp_path
+):
+    task_id = "t_r1_kill_member_identity_rebind"
+    first = _synthetic_record(task_id, pid=65000, pgrp=65000, session=65000)
+    second = _synthetic_record(task_id, pid=65001, pgrp=65000, session=65000)
+    current = {first.pid: first, second.pid: second}
+    signals = []
+
+    monkeypatch.setattr(
+        reaper, "iter_process_records", lambda **kwargs: list(current.values())
+    )
+    monkeypatch.setattr(
+        reaper,
+        "read_process_record",
+        lambda pid, **kwargs: current.get(pid),
+    )
+
+    def send(fd, signum):
+        signals.append((fd, signum))
+        if fd == first.pid and signum == signal.SIGKILL:
+            current[second.pid] = _synthetic_record(
+                "t_other_worker",
+                pid=second.pid,
+                pgrp=second.pgrp,
+                session=second.session,
+                start_time=second.start_time,
+            )
+
+    signalled, survivors, errors = reaper._terminate_groups(
+        [
+            reaper.ProcessGroup(
+                session=first.session,
+                pgrp=first.pgrp,
+                pids=(first.pid, second.pid),
+                start_times={first.pid: first.start_time, second.pid: second.start_time},
+            )
+        ],
+        task_id=task_id,
+        board="factory-reaper-test",
+        kanban_db=None,
+        proc_root=tmp_path,
+        grace_seconds=0,
+        pidfd_open=lambda pid: pid,
+        pidfd_send_signal=send,
+        close_handle=lambda fd: None,
+        refresh=lambda: _terminal_detail(task_id),
+        sleep=lambda seconds: None,
+        monotonic=lambda: 0,
+    )
+
+    assert signalled == [first.pid, second.pid, first.pid]
+    assert signals == [
+        (first.pid, signal.SIGTERM),
+        (second.pid, signal.SIGTERM),
+        (first.pid, signal.SIGKILL),
+    ]
+    assert second.pid in survivors
+    assert errors == [f"pid {second.pid} changed task identity"]
+
+
 def test_reaper_rejects_malformed_task_envelope_before_procfs(monkeypatch, tmp_path):
     task_id = "t_r2_malformed_task"
     monkeypatch.setattr(
