@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import os
+import errno
 import importlib.util
+import inspect
 import math
 import signal
 import sqlite3
@@ -486,7 +488,6 @@ def test_f1_reaper_rejects_missing_initial_task_identity(tmp_path):
         board="factory-reaper-test",
         proc_root=tmp_path,
         refresh=lambda: _terminal_detail("t_f1_missing"),
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
     )
 
     assert report["status"] == "skipped"
@@ -510,7 +511,6 @@ def test_reaper_rejects_empty_current_run_before_procfs(monkeypatch, tmp_path):
         board="factory-reaper-test",
         proc_root=tmp_path,
         refresh=lambda: detail,
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
     )
 
     assert report["status"] == "not_applicable"
@@ -522,21 +522,20 @@ def test_f1_reaper_revalidates_task_before_sigterm(monkeypatch, tmp_path):
     task_id = "t_f1_race"
     record = _synthetic_record(task_id)
     _patch_synthetic_process_view(monkeypatch, record)
-    refresh_values = iter(
-        [
-            _terminal_detail(task_id),
-            _terminal_detail(task_id, current_run_id=41),
-        ]
-    )
     signals = []
     report = reaper.reap_terminal_task_workers(
         _terminal_detail(task_id),
         task_id=task_id,
         board="factory-reaper-test",
         proc_root=tmp_path,
-        refresh=lambda: next(refresh_values),
+        reservation=_ReservationFixture(
+            _terminal_detail(task_id),
+            _terminal_detail(task_id, current_run_id=41),
+        ),
+        pidfd_open=lambda pid: pid,
+        pidfd_send_signal=lambda fd, signum: signals.append((fd, signum)),
+        close_handle=lambda fd: None,
         grace_seconds=0,
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
         monotonic=lambda: 0,
     )
 
@@ -555,8 +554,7 @@ def test_f1_reaper_rejects_mismatched_refresh_identity(monkeypatch, tmp_path):
         task_id=task_id,
         board="factory-reaper-test",
         proc_root=tmp_path,
-        refresh=lambda: _terminal_detail("t_other"),
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+        reservation=_ReservationFixture(_terminal_detail("t_other")),
     )
 
     assert report["status"] == "skipped"
@@ -591,7 +589,6 @@ def test_f2_reaper_rejects_malformed_numeric_proc_entry(tmp_path):
         proc_root=tmp_path,
         current_pid=os.getpid(),
         refresh=lambda: detail,
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
     )
 
     assert report["status"] == "unsafe"
@@ -611,8 +608,10 @@ def test_f2_reaper_rejects_unreadable_captured_member(monkeypatch, tmp_path):
         task_id=task_id,
         board="factory-reaper-test",
         proc_root=tmp_path,
-        refresh=lambda: detail,
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+        reservation=_ReservationFixture(detail),
+        pidfd_open=lambda pid: pid,
+        pidfd_send_signal=lambda fd, signum: signals.append((fd, signum)),
+        close_handle=lambda fd: None,
     )
 
     assert report["status"] == "partial"
@@ -637,8 +636,10 @@ def test_f3_reaper_rejects_moved_captured_member(monkeypatch, tmp_path):
         task_id=task_id,
         board="factory-reaper-test",
         proc_root=tmp_path,
-        refresh=lambda: detail,
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+        reservation=_ReservationFixture(detail),
+        pidfd_open=lambda pid: pid,
+        pidfd_send_signal=lambda fd, signum: signals.append((fd, signum)),
+        close_handle=lambda fd: None,
     )
 
     assert report["status"] == "partial"
@@ -661,7 +662,6 @@ def test_f4_reaper_rejects_unknown_caller_session(monkeypatch, tmp_path):
         board="factory-reaper-test",
         proc_root=tmp_path,
         refresh=lambda: detail,
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
     )
 
     assert report["status"] == "unsafe"
@@ -698,7 +698,9 @@ def test_reaper_f5_force_authorization_never_escalates_to_sigkill(monkeypatch, t
         kanban_db=None,
         proc_root=tmp_path,
         grace_seconds=0,
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+        pidfd_open=lambda pid: pid,
+        pidfd_send_signal=lambda fd, signum: signals.append((fd, signum)),
+        close_handle=lambda fd: None,
         sleep=lambda seconds: None,
         monotonic=lambda: 0,
         refresh=lambda: _terminal_detail(task_id),
@@ -747,7 +749,9 @@ def test_reaper_rejects_final_enumeration_pid_reuse_before_signal(monkeypatch, t
         kanban_db=None,
         proc_root=tmp_path,
         grace_seconds=0,
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+        pidfd_open=lambda pid: pid,
+        pidfd_send_signal=lambda fd, signum: signals.append((fd, signum)),
+        close_handle=lambda fd: None,
         sleep=lambda seconds: None,
         monotonic=lambda: 0,
         refresh=lambda: _terminal_detail(task_id),
@@ -779,7 +783,6 @@ def test_reaper_rejects_malformed_task_envelope_before_procfs(monkeypatch, tmp_p
         board="factory-reaper-test",
         proc_root=tmp_path,
         refresh=lambda: _terminal_detail(task_id),
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
     )
 
     assert report["status"] == "skipped"
@@ -830,7 +833,6 @@ def test_reaper_rejects_invalid_grace_seconds_before_procfs(
         proc_root=tmp_path,
         refresh=lambda: _terminal_detail(task_id),
         grace_seconds=grace_seconds,
-        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
     )
 
     assert report["status"] == "skipped"
@@ -866,12 +868,16 @@ def test_reaper_caps_oversized_grace_before_force_kill(monkeypatch, tmp_path):
     monkeypatch.setattr(reaper, "_snapshot_still_bound", lambda *args, **kwargs: (True, None))
     monkeypatch.setattr(
         reaper,
-        "_live_pids",
-        lambda *args, **kwargs: [] if phase["killed"] else [58000],
+        "_membership_snapshot",
+        lambda *args, **kwargs: reaper.MembershipSnapshot(
+            live_pids=() if phase["killed"] else (58000,),
+            uncertain_pids=(),
+            errors=(),
+        ),
     )
 
-    def killpg(pgrp, signum):
-        signals.append((pgrp, signum))
+    def send(fd, signum):
+        signals.append((fd, signum))
         if signum == signal.SIGKILL:
             phase["killed"] = True
 
@@ -886,7 +892,9 @@ def test_reaper_caps_oversized_grace_before_force_kill(monkeypatch, tmp_path):
         kanban_db=None,
         proc_root=tmp_path,
         grace_seconds=reaper.MAX_GRACE_SECONDS + 1,
-        killpg=killpg,
+        pidfd_open=lambda pid: pid,
+        pidfd_send_signal=send,
+        close_handle=lambda fd: None,
         sleep=sleep,
         monotonic=lambda: clock["now"],
         refresh=lambda: _terminal_detail(task_id),
@@ -957,3 +965,239 @@ def test_reaper_rejects_whitespace_normalized_process_identity(env_key, env_valu
         board=board,
         kanban_db=None,
     )
+
+
+class _ReservationFixture:
+    def __init__(self, *details):
+        self.details = iter(details)
+        self.reads = 0
+
+    def assert_healthy(self):
+        return None
+
+    def read_task(self, task_id):
+        self.reads += 1
+        return next(self.details)
+
+
+def test_r1_pidfd_unavailable_fails_closed_without_group_fallback(monkeypatch, tmp_path):
+    task_id = "t_r1_no_pidfd"
+    record = _synthetic_record(task_id)
+    _patch_synthetic_process_view(monkeypatch, record)
+    sends = []
+
+    def unavailable(pid):
+        raise OSError(errno.ENOSYS, "pidfd unavailable")
+
+    report = reaper.reap_terminal_task_workers(
+        _terminal_detail(task_id),
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        reservation=_ReservationFixture(_terminal_detail(task_id)),
+        pidfd_open=unavailable,
+        pidfd_send_signal=lambda fd, signum: sends.append((fd, signum)),
+    )
+
+    assert report["status"] == "unsafe"
+    assert "stable process handle" in report["reason"]
+    assert sends == []
+
+
+def test_r1_pid_reuse_after_handle_acquisition_is_not_signalled(monkeypatch, tmp_path):
+    task_id = "t_r1_handle_pid_reuse"
+    captured = _synthetic_record(task_id, pid=61000, pgrp=61000, session=61000)
+    replacement = _synthetic_record(
+        task_id, pid=61000, pgrp=61000, session=61000, start_time=99
+    )
+    acquired = {"value": False}
+    monkeypatch.setattr(
+        reaper,
+        "iter_process_records",
+        lambda **kwargs: [replacement if acquired["value"] else captured],
+    )
+    monkeypatch.setattr(
+        reaper,
+        "read_process_record",
+        lambda pid, **kwargs: replacement if acquired["value"] else captured,
+    )
+    monkeypatch.setattr(reaper.os, "getpgrp", lambda: 1)
+    monkeypatch.setattr(reaper.os, "getsid", lambda pid: 2)
+    sends = []
+
+    def open_handle(pid):
+        acquired["value"] = True
+        return 31
+
+    report = reaper.reap_terminal_task_workers(
+        _terminal_detail(task_id),
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        reservation=_ReservationFixture(_terminal_detail(task_id)),
+        pidfd_open=open_handle,
+        pidfd_send_signal=lambda fd, signum: sends.append((fd, signum)),
+    )
+
+    assert report["status"] == "partial"
+    assert "changed start time" in report["reason"]
+    assert sends == []
+
+
+def test_r1_membership_change_between_validation_and_signal_fails_closed(
+    monkeypatch, tmp_path
+):
+    task_id = "t_r1_membership_change"
+    captured = _synthetic_record(task_id, pid=62000, pgrp=62000, session=62000)
+    new_member = _synthetic_record(
+        task_id, pid=62001, pgrp=62000, session=62000, start_time=13
+    )
+    acquired = {"value": False}
+    monkeypatch.setattr(
+        reaper,
+        "iter_process_records",
+        lambda **kwargs: [captured, new_member] if acquired["value"] else [captured],
+    )
+    monkeypatch.setattr(
+        reaper,
+        "read_process_record",
+        lambda pid, **kwargs: captured if pid == captured.pid else new_member,
+    )
+    monkeypatch.setattr(reaper.os, "getpgrp", lambda: 1)
+    monkeypatch.setattr(reaper.os, "getsid", lambda pid: 2)
+    sends = []
+
+    def open_handle(pid):
+        acquired["value"] = True
+        return pid
+
+    report = reaper.reap_terminal_task_workers(
+        _terminal_detail(task_id),
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        reservation=_ReservationFixture(_terminal_detail(task_id)),
+        pidfd_open=open_handle,
+        pidfd_send_signal=lambda fd, signum: sends.append((fd, signum)),
+    )
+
+    assert report["status"] == "partial"
+    assert "unexpected member" in report["reason"]
+    assert sends == []
+
+
+def test_r2_redispatch_readback_under_reservation_blocks_signal(monkeypatch, tmp_path):
+    task_id = "t_r2_redispatch"
+    record = _synthetic_record(task_id)
+    _patch_synthetic_process_view(monkeypatch, record)
+    reservation = _ReservationFixture(
+        _terminal_detail(task_id), _terminal_detail(task_id, current_run_id=42)
+    )
+    sends = []
+
+    report = reaper.reap_terminal_task_workers(
+        _terminal_detail(task_id),
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        reservation=reservation,
+        pidfd_open=lambda pid: 32,
+        pidfd_send_signal=lambda fd, signum: sends.append((fd, signum)),
+        grace_seconds=0,
+    )
+
+    assert report["status"] == "partial"
+    assert "current run" in report["reason"]
+    assert sends == []
+    assert reservation.reads >= 2
+
+
+def test_r3_new_member_after_sigterm_is_reported_as_survivor(monkeypatch, tmp_path):
+    task_id = "t_r3_spawned_survivor"
+    captured = _synthetic_record(task_id, pid=63000, pgrp=63000, session=63000)
+    new_member = _synthetic_record(
+        task_id, pid=63001, pgrp=63000, session=63000, start_time=13
+    )
+    phase = {"term_sent": False}
+    monkeypatch.setattr(
+        reaper,
+        "iter_process_records",
+        lambda **kwargs: [new_member] if phase["term_sent"] else [captured],
+    )
+    monkeypatch.setattr(
+        reaper,
+        "read_process_record",
+        lambda pid, **kwargs: captured if pid == captured.pid else new_member,
+    )
+    monkeypatch.setattr(reaper.os, "getpgrp", lambda: 1)
+    monkeypatch.setattr(reaper.os, "getsid", lambda pid: 2)
+    sends = []
+
+    def send(fd, signum):
+        sends.append((fd, signum))
+        if signum == signal.SIGTERM:
+            phase["term_sent"] = True
+
+    report = reaper.reap_terminal_task_workers(
+        _terminal_detail(task_id),
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        reservation=_ReservationFixture(
+            _terminal_detail(task_id), _terminal_detail(task_id),
+            _terminal_detail(task_id), _terminal_detail(task_id),
+        ),
+        pidfd_open=lambda pid: 33,
+        pidfd_send_signal=send,
+        grace_seconds=0,
+    )
+
+    assert report["status"] == "partial"
+    assert report["survivors"] == [63001]
+    assert sends == [(33, signal.SIGTERM)]
+    assert "unexpected member" in report["reason"]
+
+
+def test_r2_lock_timeout_is_unsafe_and_sends_nothing(tmp_path, monkeypatch):
+    db = tmp_path / "kanban.db"
+    conn = sqlite3.connect(db, isolation_level=None)
+    conn.execute(
+        "CREATE TABLE tasks (id TEXT, status TEXT, current_run_id INTEGER)"
+    )
+    conn.execute("INSERT INTO tasks VALUES ('t_r2_locked', 'blocked', NULL)")
+    conn.execute("BEGIN IMMEDIATE")
+    base_record = _synthetic_record("t_r2_locked")
+    record = reaper.ProcessRecord(
+        pid=base_record.pid,
+        ppid=base_record.ppid,
+        pgrp=base_record.pgrp,
+        session=base_record.session,
+        start_time=base_record.start_time,
+        state=base_record.state,
+        env={**base_record.env, reaper.DB_ENV: str(db)},
+    )
+    monkeypatch.setattr(reaper, "iter_process_records", lambda **kwargs: [record])
+    monkeypatch.setattr(reaper.os, "getpgrp", lambda: 1)
+    monkeypatch.setattr(reaper.os, "getsid", lambda pid: 2)
+    sends = []
+
+    report = reaper.reap_terminal_task_workers(
+        _terminal_detail("t_r2_locked"),
+        task_id="t_r2_locked",
+        board="factory-reaper-test",
+        kanban_db=db,
+        proc_root=tmp_path,
+        pidfd_open=lambda pid: 34,
+        pidfd_send_signal=lambda fd, signum: sends.append((fd, signum)),
+        reservation_timeout_seconds=0.01,
+    )
+
+    conn.rollback()
+    conn.close()
+    assert report["status"] == "unsafe"
+    assert "reservation" in report["reason"] or "locked" in report["reason"]
+    assert sends == []
+
+
+def test_reaper_contains_no_killpg_fallback():
+    assert "killpg" not in inspect.getsource(reaper)

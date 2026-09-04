@@ -18,10 +18,14 @@ from __future__ import annotations
 import math
 import os
 import signal
+import sqlite3
+import stat
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
+from urllib.parse import quote
 
 
 PROC_ROOT = Path("/proc")
@@ -35,6 +39,7 @@ IDENTITY_ENV_KEYS = frozenset({TASK_ENV, RUN_ENV, BOARD_ENV, DB_ENV})
 MAX_GRACE_SECONDS = 30.0
 # Survivor readback is independently bounded after SIGKILL.
 MAX_SURVIVOR_READBACK_SECONDS = 2.0
+MAX_DB_RESERVATION_SECONDS = 2.0
 TERMINAL_TASK_STATES = frozenset(
     {"archived", "blocked", "cancelled", "done", "failed", "review"}
 )
@@ -63,6 +68,206 @@ class ProcessGroup:
     pgrp: int
     pids: tuple[int, ...]
     start_times: Mapping[int, int]
+
+
+@dataclass(frozen=True)
+class ProcessHandle:
+    """A stable kernel handle plus the identity captured for its process."""
+
+    pid: int
+    fd: int
+    start_time: int
+    session: int
+    pgrp: int
+
+
+@dataclass(frozen=True)
+class MembershipSnapshot:
+    """Current target membership and any uncertainty in its enumeration."""
+
+    live_pids: tuple[int, ...]
+    uncertain_pids: tuple[int, ...]
+    errors: tuple[str, ...]
+
+
+class ReservationError(RuntimeError):
+    """The exact board database could not be reserved or verified."""
+
+
+def _database_file_identity(path: Path) -> tuple[int, int]:
+    try:
+        info = path.stat()
+    except (FileNotFoundError, PermissionError, OSError) as exc:
+        raise ReservationError(f"board database is unreadable: {path}") from exc
+    if not stat.S_ISREG(info.st_mode):
+        raise ReservationError(f"board database is not a regular file: {path}")
+    return info.st_dev, info.st_ino
+
+
+def _sqlite_uri(path: Path) -> str:
+    return f"file:{quote(str(path), safe='/')}?mode=rw"
+
+
+class SQLiteWriteReservation:
+    """Hold a bounded write reservation on one resolved Kanban database.
+
+    The reservation deliberately performs no task mutation.  Its purpose is to
+    prevent another SQLite writer (the dispatcher) from changing the exact task
+    between the terminal readback and process signalling.
+    """
+
+    _REQUIRED_TASK_COLUMNS = frozenset({"id", "status", "current_run_id"})
+
+    def __init__(
+        self,
+        path: str | os.PathLike[str] | None,
+        task_id: str,
+        *,
+        timeout_seconds: float = MAX_DB_RESERVATION_SECONDS,
+    ) -> None:
+        if path is None:
+            raise ReservationError("exact board database path is unavailable")
+        text = _normalise_path(path)
+        if text is None:
+            raise ReservationError("exact board database path is unavailable")
+        try:
+            timeout = float(timeout_seconds)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ReservationError("database reservation timeout is invalid") from exc
+        if not math.isfinite(timeout) or timeout < 0:
+            raise ReservationError("database reservation timeout is invalid")
+        self.path = Path(text)
+        self.task_id = task_id
+        self.timeout_seconds = min(timeout, MAX_DB_RESERVATION_SECONDS)
+        self._connection: sqlite3.Connection | None = None
+        self._identity: tuple[int, int] | None = None
+
+    def __enter__(self) -> "SQLiteWriteReservation":
+        identity = _database_file_identity(self.path)
+        try:
+            connection = sqlite3.connect(
+                _sqlite_uri(self.path),
+                uri=True,
+                timeout=self.timeout_seconds,
+                isolation_level=None,
+            )
+            self._connection = connection
+            connection.execute("BEGIN IMMEDIATE")
+            self._identity = identity
+            self._verify_connection()
+            return self
+        except ReservationError:
+            self._close_after_failed_open()
+            raise
+        except (OSError, sqlite3.Error) as exc:
+            self._close_after_failed_open()
+            message = str(exc).lower()
+            if "locked" in message or "busy" in message:
+                raise ReservationError(
+                    "board database write reservation timed out"
+                ) from exc
+            raise ReservationError(
+                f"board database write reservation failed: {exc}"
+            ) from exc
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        connection = self._connection
+        self._connection = None
+        self._identity = None
+        if connection is None:
+            return
+        try:
+            connection.rollback()
+        except sqlite3.Error:
+            pass
+        try:
+            connection.close()
+        except sqlite3.Error:
+            pass
+
+    def _close_after_failed_open(self) -> None:
+        connection = self._connection
+        self._connection = None
+        self._identity = None
+        if connection is None:
+            return
+        try:
+            connection.rollback()
+        except sqlite3.Error:
+            pass
+        try:
+            connection.close()
+        except sqlite3.Error:
+            pass
+
+    def _verify_connection(self) -> None:
+        connection = self._connection
+        identity = self._identity
+        if connection is None or identity is None:
+            raise ReservationError("board database reservation is not active")
+        if _database_file_identity(self.path) != identity:
+            raise ReservationError("board database was replaced during reservation")
+        try:
+            rows = connection.execute("PRAGMA database_list").fetchall()
+            main_path = next(
+                (str(row[2]) for row in rows if len(row) >= 3 and row[1] == "main"),
+                "",
+            )
+        except sqlite3.Error as exc:
+            raise ReservationError(
+                "board database identity readback failed"
+            ) from exc
+        if not main_path:
+            raise ReservationError("board database identity is unreadable")
+        try:
+            resolved_main = str(Path(main_path).expanduser().resolve(strict=False))
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise ReservationError("board database identity is unreadable") from exc
+        if resolved_main != str(self.path):
+            raise ReservationError("SQLite opened a different board database")
+        try:
+            columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(tasks)").fetchall()
+                if len(row) > 1 and isinstance(row[1], str)
+            }
+        except sqlite3.Error as exc:
+            raise ReservationError("board database schema readback failed") from exc
+        if not self._REQUIRED_TASK_COLUMNS.issubset(columns):
+            raise ReservationError(
+                "board database schema is missing the task identity columns"
+            )
+
+    def assert_healthy(self) -> None:
+        """Recheck path identity and schema while the write lock is held."""
+
+        self._verify_connection()
+
+    def read_task(self, task_id: str) -> dict[str, Any] | None:
+        """Read the exact minimal task identity under the write reservation."""
+
+        self.assert_healthy()
+        connection = self._connection
+        if connection is None:
+            raise ReservationError("board database reservation is not active")
+        try:
+            row = connection.execute(
+                "SELECT id, status, current_run_id FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+        except sqlite3.Error as exc:
+            raise ReservationError("task readback failed under reservation") from exc
+        if row is None:
+            return None
+        if not isinstance(row[0], str) or not isinstance(row[1], str):
+            raise ReservationError("task readback identity is malformed")
+        return {
+            "task": {
+                "id": row[0],
+                "status": row[1],
+                "current_run_id": row[2],
+            }
+        }
 
 
 
@@ -250,7 +455,7 @@ def process_identity_matches(
     elif expected_db is None or actual_db != expected_db:
         return False
 
-    if expected_db is not None and actual_db is not None and actual_db != expected_db:
+    if expected_db is not None and actual_db != expected_db:
         return False
     return bool(actual_board or actual_db)
 
@@ -329,6 +534,72 @@ def _record_is_readable(record: ProcessRecord) -> bool:
         and isinstance(record.state, str)
         and isinstance(record.env, Mapping)
     )
+
+
+def _pidfd_open(pid: int) -> int:
+    """Open a Linux pidfd, or fail explicitly when the primitive is absent."""
+
+    if not sys.platform.startswith("linux"):
+        raise OSError("stable process handles are unavailable on this platform")
+    opener = getattr(os, "pidfd_open", None)
+    if not callable(opener):
+        raise OSError("pidfd_open is unavailable")
+    return opener(pid, 0)
+
+
+def _pidfd_send_signal(fd: int, signum: int) -> None:
+    """Signal one process through its stable pidfd."""
+
+    if not sys.platform.startswith("linux"):
+        raise OSError("stable process handles are unavailable on this platform")
+    sender = getattr(signal, "pidfd_send_signal", None)
+    if not callable(sender):
+        raise OSError("pidfd_send_signal is unavailable")
+    sender(fd, signum, None, 0)
+
+
+def _close_process_handles(
+    handles: Mapping[int, ProcessHandle], close_handle: Callable[[int], None]
+) -> None:
+    for handle in handles.values():
+        try:
+            close_handle(handle.fd)
+        except (OSError, ValueError):
+            pass
+
+
+def _open_process_handles(
+    groups: Iterable[ProcessGroup],
+    *,
+    open_handle: Callable[[int], int],
+    close_handle: Callable[[int], None],
+) -> tuple[dict[int, ProcessHandle], str | None]:
+    """Open one stable handle per captured member before any signal."""
+
+    handles: dict[int, ProcessHandle] = {}
+    fds: set[int] = set()
+    for group in groups:
+        for pid in group.pids:
+            try:
+                fd = open_handle(pid)
+            except Exception as exc:
+                _close_process_handles(handles, close_handle)
+                return {}, f"stable process handle unavailable for pid {pid}: {exc}"
+            if isinstance(fd, bool) or not isinstance(fd, int) or fd < 0:
+                _close_process_handles(handles, close_handle)
+                return {}, f"stable process handle for pid {pid} is unreadable"
+            if fd in fds:
+                _close_process_handles(handles, close_handle)
+                return {}, f"stable process handle for pid {pid} was duplicated"
+            fds.add(fd)
+            handles[pid] = ProcessHandle(
+                pid=pid,
+                fd=fd,
+                start_time=group.start_times[pid],
+                session=group.session,
+                pgrp=group.pgrp,
+            )
+    return handles, None
 
 
 def _validated_groups(
@@ -413,8 +684,13 @@ def _snapshot_still_bound(
     board: str,
     kanban_db: str | os.PathLike[str] | None,
     proc_root: Path,
+    handles: Mapping[int, ProcessHandle] | None = None,
 ) -> tuple[bool, str | None]:
-    """Reject PID reuse or a changed process identity before signalling."""
+    """Reject PID reuse or a changed process identity before signalling.
+
+    When handles are supplied this is specifically the post-acquisition
+    validation required before any pidfd signal is sent.
+    """
 
     if len(group.pids) != len(set(group.pids)):
         return False, f"process group {group.pgrp} has duplicate captured pids"
@@ -428,9 +704,27 @@ def _snapshot_still_bound(
         for pid in group.pids
     ):
         return False, f"process group {group.pgrp} has an invalid identity snapshot"
-    current = {
-        pid: read_process_record(pid, proc_root=proc_root) for pid in group.pids
-    }
+    if handles is not None:
+        for pid in group.pids:
+            handle = handles.get(pid)
+            if handle is None:
+                return False, f"pid {pid} has no stable process handle"
+            if (
+                handle.pid != pid
+                or handle.start_time != group.start_times[pid]
+                or handle.session != group.session
+                or handle.pgrp != group.pgrp
+                or isinstance(handle.fd, bool)
+                or not isinstance(handle.fd, int)
+                or handle.fd < 0
+            ):
+                return False, f"pid {pid} has an invalid stable process handle"
+    try:
+        current = {
+            pid: read_process_record(pid, proc_root=proc_root) for pid in group.pids
+        }
+    except Exception:
+        return False, "process identity readback failed during revalidation"
     for pid in group.pids:
         expected_start = group.start_times[pid]
         record = current.get(pid)
@@ -449,7 +743,10 @@ def _snapshot_still_bound(
         ):
             return False, f"pid {pid} changed task identity"
     # A new, unbound member in the same session/group is a fail-closed race.
-    enumerated = iter_process_records(proc_root=proc_root)
+    try:
+        enumerated = list(iter_process_records(proc_root=proc_root))
+    except Exception:
+        return False, "process enumeration failed during revalidation"
     if any(not _record_is_readable(record) for record in enumerated):
         return False, "process enumeration is incomplete during revalidation"
     enumerated_by_pid: dict[int, ProcessRecord] = {}
@@ -482,6 +779,106 @@ def _snapshot_still_bound(
 
 
 
+def _proc_entry_present(pid: int, *, proc_root: Path) -> bool:
+    try:
+        (proc_root / str(pid)).stat()
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def _membership_snapshot(
+    group: ProcessGroup,
+    *,
+    proc_root: Path,
+    task_id: str,
+    board: str,
+    kanban_db: str | os.PathLike[str] | None,
+) -> MembershipSnapshot:
+    """Enumerate the current session/group, not only captured process IDs."""
+
+    live: set[int] = set()
+    uncertain: set[int] = set()
+    errors: list[str] = []
+    captured = set(group.pids)
+    try:
+        enumerated = list(iter_process_records(proc_root=proc_root))
+    except Exception:
+        return MembershipSnapshot(
+            live_pids=(),
+            uncertain_pids=(),
+            errors=("process enumeration failed during survivor readback",),
+        )
+
+    by_pid: dict[int, ProcessRecord] = {}
+    for record in enumerated:
+        if not isinstance(record, ProcessRecord):
+            errors.append("process enumeration contains a malformed record")
+            continue
+        if record.pid in by_pid:
+            errors.append(f"process enumeration contains duplicate pid {record.pid}")
+            continue
+        by_pid[record.pid] = record
+        if not _record_is_readable(record):
+            if record.pid > 0:
+                uncertain.add(record.pid)
+            errors.append(f"process enumeration contains unreadable record {record.pid}")
+
+    for pid, expected_start in group.start_times.items():
+        record = by_pid.get(pid)
+        if record is None:
+            # A missing proc entry is an exited process.  If the entry still
+            # exists but cannot be read, retain it as an uncertain survivor.
+            if not _proc_entry_present(pid, proc_root=proc_root):
+                continue
+            current = read_process_record(pid, proc_root=proc_root)
+            if current is None or not _record_is_readable(current):
+                live.add(pid)
+                uncertain.add(pid)
+                errors.append(f"pid {pid} became unreadable during survivor readback")
+            elif current.state != "Z":
+                live.add(pid)
+                errors.append(f"pid {pid} left the captured process group")
+            continue
+        if not _record_is_readable(record) or record.pid != pid:
+            live.add(pid)
+            uncertain.add(pid)
+            errors.append(f"pid {pid} is unreadable during survivor readback")
+            continue
+        if record.start_time != expected_start:
+            live.add(pid)
+            errors.append(f"pid {pid} changed start time during survivor readback")
+            continue
+        if record.session != group.session:
+            live.add(pid)
+            errors.append(f"pid {pid} changed session during survivor readback")
+            continue
+        if record.pgrp != group.pgrp:
+            live.add(pid)
+            errors.append(f"pid {pid} changed process group during survivor readback")
+            continue
+        if record.state != "Z":
+            # A process with an unreadable environment is still a live
+            # survivor.  Identity is required for a future signal, not for
+            # conservative survivor reporting.
+            live.add(pid)
+
+    for record in enumerated:
+        if not _record_is_readable(record):
+            continue
+        if record.session == group.session and record.pgrp == group.pgrp:
+            if record.pid not in captured:
+                live.add(record.pid)
+                errors.append(f"process group {group.pgrp} gained an unexpected member")
+    return MembershipSnapshot(
+        live_pids=tuple(sorted(live)),
+        uncertain_pids=tuple(sorted(uncertain)),
+        errors=tuple(dict.fromkeys(errors)),
+    )
+
+
 def _live_pids(
     group: ProcessGroup,
     *,
@@ -490,48 +887,42 @@ def _live_pids(
     board: str,
     kanban_db: str | os.PathLike[str] | None,
 ) -> list[int]:
-    def proc_entry_present(pid: int) -> bool:
-        try:
-            (proc_root / str(pid)).stat()
-        except FileNotFoundError:
-            return False
-        except OSError:
-            return True
-        return True
+    """Return all known and uncertain current survivors for compatibility."""
 
-    live: list[int] = []
-    for pid, expected_start in group.start_times.items():
-        record = read_process_record(pid, proc_root=proc_root)
-        if record is None:
-            if proc_entry_present(pid):
-                live.append(pid)
-            continue
-        if not _record_is_readable(record) or record.pid != pid:
-            live.append(pid)
-            continue
-        if record.state == "Z":
-            continue
-        if record.start_time != expected_start:
-            live.append(pid)
-            continue
-        # Once a group has been signalled, a surviving process remains a
-        # survivor even if it clears or makes its environment unreadable. The
-        # next destructive signal is separately guarded by
-        # ``_snapshot_still_bound``; do not misreport an identity-changing
-        # survivor as exited.
-        live.append(pid)
-    return live
+    state = _membership_snapshot(
+        group,
+        proc_root=proc_root,
+        task_id=task_id,
+        board=board,
+        kanban_db=kanban_db,
+    )
+    survivors = set(state.live_pids) | set(state.uncertain_pids)
+    if not survivors:
+        # Preserve the historical helper's direct-read behavior for callers
+        # that provide a synthetic process reader without a procfs entry.
+        for pid in group.pids:
+            current = read_process_record(pid, proc_root=proc_root)
+            if current is not None and current.state != "Z":
+                survivors.add(pid)
+    return sorted(survivors)
 
 
 
 def _refresh_task_reason(
-    refresh: Callable[[], Mapping[str, Any] | None],
+    refresh: Callable[[], Mapping[str, Any] | None] | None,
     *,
     task_id: str,
     signal_name: str,
+    reservation: Any | None = None,
 ) -> str | None:
     try:
-        latest = refresh()
+        if reservation is not None:
+            reservation.assert_healthy()
+            latest = reservation.read_task(task_id)
+        elif refresh is not None:
+            latest = refresh()
+        else:
+            return f"task readback unavailable before {signal_name}"
     except Exception:
         return f"task readback failed before {signal_name}"
     if latest is None:
@@ -547,11 +938,16 @@ def _terminate_groups(
     kanban_db: str | os.PathLike[str] | None,
     proc_root: Path,
     grace_seconds: float,
-    killpg: Callable[[int, int], None],
     sleep: Callable[[float], None],
     monotonic: Callable[[], float],
-    refresh: Callable[[], Mapping[str, Any] | None],
+    refresh: Callable[[], Mapping[str, Any] | None] | None,
+    reservation: Any | None = None,
+    pidfd_open: Callable[[int], int] | None = None,
+    pidfd_send_signal: Callable[[int, int], None] | None = None,
+    close_handle: Callable[[int], None] | None = None,
 ) -> tuple[list[int], list[int], list[str]]:
+    """Signal exact members through stable handles under one reservation."""
+
     validated_grace, grace_reason = _validated_grace_seconds(grace_seconds)
     if grace_reason:
         return [], [], [grace_reason]
@@ -559,117 +955,326 @@ def _terminate_groups(
     grace_seconds = validated_grace
     group_list = list(groups)
     errors: list[str] = []
-    term_sent: list[int] = []
+    signalled_pids: list[int] = []
+    signalled_group_ids: set[int] = set()
     term_authorized: list[ProcessGroup] = []
-    for group in group_list:
-        safe, reason = _snapshot_still_bound(
+    final_states: dict[int, MembershipSnapshot] = {}
+
+    def add_error(reason: str | None) -> None:
+        if reason and reason not in errors:
+            errors.append(reason)
+
+    if reservation is not None:
+        try:
+            reservation.assert_healthy()
+        except Exception:
+            return [], [], ["board database reservation became unsafe before signalling"]
+
+    open_fn = pidfd_open or _pidfd_open
+    send_fn = pidfd_send_signal or _pidfd_send_signal
+    close_fn = close_handle or os.close
+    handles, handle_reason = _open_process_handles(
+        group_list, open_handle=open_fn, close_handle=close_fn
+    )
+    if handle_reason:
+        return [], [], [handle_reason]
+
+    def read_membership(group: ProcessGroup) -> MembershipSnapshot:
+        state = _membership_snapshot(
             group,
+            proc_root=proc_root,
             task_id=task_id,
             board=board,
             kanban_db=kanban_db,
-            proc_root=proc_root,
         )
-        if not safe:
-            errors.append(reason or f"process group {group.pgrp} failed revalidation")
-            continue
-        task_reason = _refresh_task_reason(
-            refresh, task_id=task_id, signal_name="SIGTERM"
-        )
-        if task_reason:
-            errors.append(task_reason)
-            continue
-        try:
-            killpg(group.pgrp, signal.SIGTERM)
-            term_sent.append(group.pgrp)
-            term_authorized.append(group)
-        except ProcessLookupError:
-            # The group already ended; this is an idempotent success.
-            pass
-        except PermissionError:
-            errors.append(f"permission denied for process group {group.pgrp}")
-        except OSError as exc:
-            errors.append(f"signal failed for process group {group.pgrp}: {exc.errno}")
+        final_states[group.pgrp] = state
+        for reason in state.errors:
+            add_error(reason)
+        return state
 
-    deadline = monotonic() + max(0.0, grace_seconds)
-    # Only groups that passed pre-SIGTERM validation and received SIGTERM are
-    # authorized to reach the force-kill phase.
-    remaining_groups = term_authorized
-    while remaining_groups and monotonic() < deadline:
-        remaining_groups = [
-            group
-            for group in remaining_groups
-            if _live_pids(
+    try:
+        # Handle acquisition is followed by a full identity and membership
+        # revalidation.  The second validation after task readback closes the
+        # gap between the two independent readbacks.
+        for group in group_list:
+            safe, reason = _snapshot_still_bound(
                 group,
-                proc_root=proc_root,
                 task_id=task_id,
                 board=board,
                 kanban_db=kanban_db,
+                proc_root=proc_root,
+                handles=handles,
             )
+            if not safe:
+                add_error(reason or f"process group {group.pgrp} failed revalidation")
+                continue
+            task_reason = _refresh_task_reason(
+                refresh,
+                task_id=task_id,
+                signal_name="SIGTERM",
+                reservation=reservation,
+            )
+            if task_reason:
+                add_error(task_reason)
+                continue
+            safe, reason = _snapshot_still_bound(
+                group,
+                task_id=task_id,
+                board=board,
+                kanban_db=kanban_db,
+                proc_root=proc_root,
+                handles=handles,
+            )
+            if not safe:
+                add_error(reason or f"process group {group.pgrp} changed before SIGTERM")
+                continue
+
+            group_safe = True
+            for pid in group.pids:
+                handle = handles[pid]
+                try:
+                    send_fn(handle.fd, signal.SIGTERM)
+                    signalled_pids.append(pid)
+                    signalled_group_ids.add(group.pgrp)
+                except ProcessLookupError:
+                    # The exact process ended between validation and the
+                    # pidfd syscall; no other process is broadened by this.
+                    pass
+                except PermissionError:
+                    add_error(f"permission denied for stable process handle {pid}")
+                    group_safe = False
+                    break
+                except OSError as exc:
+                    add_error(f"signal failed for stable process handle {pid}: {exc.errno}")
+                    group_safe = False
+                    break
+                state = read_membership(group)
+                if state.errors or state.uncertain_pids:
+                    group_safe = False
+                    break
+            if group_safe:
+                term_authorized.append(group)
+
+        # Only groups that remained continuously clean after SIGTERM can reach
+        # the force phase.  Poll count is capped in addition to the injected
+        # monotonic deadline so a broken test clock cannot spin forever.
+        deadline = monotonic() + max(0.0, grace_seconds)
+        max_polls = max(1, int(grace_seconds / 0.05) + 1)
+        poll_count = 0
+        remaining_groups = list(term_authorized)
+        while remaining_groups and monotonic() < deadline and poll_count < max_polls:
+            poll_count += 1
+            next_groups: list[ProcessGroup] = []
+            for group in remaining_groups:
+                state = read_membership(group)
+                if state.errors or state.uncertain_pids:
+                    continue
+                if state.live_pids:
+                    next_groups.append(group)
+            remaining_groups = next_groups
+            if remaining_groups:
+                wait_for = min(0.05, max(0.0, deadline - monotonic()))
+                if wait_for > 0:
+                    sleep(wait_for)
+
+        kill_sent: list[int] = []
+        for group in remaining_groups:
+            safe, reason = _snapshot_still_bound(
+                group,
+                task_id=task_id,
+                board=board,
+                kanban_db=kanban_db,
+                proc_root=proc_root,
+                handles=handles,
+            )
+            if not safe:
+                add_error(reason or f"process group {group.pgrp} failed kill revalidation")
+                continue
+            task_reason = _refresh_task_reason(
+                refresh,
+                task_id=task_id,
+                signal_name="SIGKILL",
+                reservation=reservation,
+            )
+            if task_reason:
+                add_error(task_reason)
+                continue
+            safe, reason = _snapshot_still_bound(
+                group,
+                task_id=task_id,
+                board=board,
+                kanban_db=kanban_db,
+                proc_root=proc_root,
+                handles=handles,
+            )
+            if not safe:
+                add_error(reason or f"process group {group.pgrp} changed before SIGKILL")
+                continue
+
+            group_safe = True
+            for pid in group.pids:
+                handle = handles[pid]
+                try:
+                    send_fn(handle.fd, signal.SIGKILL)
+                    kill_sent.append(pid)
+                    signalled_pids.append(pid)
+                    signalled_group_ids.add(group.pgrp)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    add_error(f"permission denied for stable process handle {pid}")
+                    group_safe = False
+                    break
+                except OSError as exc:
+                    add_error(f"kill failed for stable process handle {pid}: {exc.errno}")
+                    group_safe = False
+                    break
+                state = read_membership(group)
+                if state.errors or state.uncertain_pids:
+                    group_safe = False
+                    break
+            if not group_safe:
+                continue
+
+        # Always perform a final bounded membership readback for any group that
+        # received a signal.  An unsafe/new member is retained in the result;
+        # it is never converted into a false "reaped" outcome.
+        signalled_groups = [
+            group for group in group_list if group.pgrp in signalled_group_ids
         ]
-        if remaining_groups:
-            sleep(min(0.05, max(0.0, deadline - monotonic())))
-
-    kill_sent: list[int] = []
-    for group in remaining_groups:
-        safe, reason = _snapshot_still_bound(
-            group,
-            task_id=task_id,
-            board=board,
-            kanban_db=kanban_db,
-            proc_root=proc_root,
-        )
-        if not safe:
-            errors.append(reason or f"process group {group.pgrp} failed kill revalidation")
-            continue
-        task_reason = _refresh_task_reason(
-            refresh, task_id=task_id, signal_name="SIGKILL"
-        )
-        if task_reason:
-            errors.append(task_reason)
-            continue
-        try:
-            killpg(group.pgrp, signal.SIGKILL)
-            kill_sent.append(group.pgrp)
-        except ProcessLookupError:
-            pass
-        except PermissionError:
-            errors.append(f"permission denied for process group {group.pgrp}")
-        except OSError as exc:
-            errors.append(f"kill failed for process group {group.pgrp}: {exc.errno}")
-
-    if kill_sent:
-        deadline = monotonic() + min(
+        final_deadline = monotonic() + min(
             MAX_SURVIVOR_READBACK_SECONDS, max(0.2, grace_seconds)
         )
-        while monotonic() < deadline:
-            still_live = [
-                pid
-                for group in group_list
-                for pid in _live_pids(
-                    group,
-                    proc_root=proc_root,
-                    task_id=task_id,
-                    board=board,
-                    kanban_db=kanban_db,
-                )
-            ]
-            if not still_live:
+        final_polls = 0
+        final_max_polls = max(1, int(min(
+            MAX_SURVIVOR_READBACK_SECONDS, max(0.2, grace_seconds)
+        ) / 0.05) + 1)
+        while signalled_groups and final_polls < final_max_polls:
+            final_polls += 1
+            states = [read_membership(group) for group in signalled_groups]
+            if any(state.errors or state.uncertain_pids for state in states):
                 break
-            sleep(0.05)
+            if not any(state.live_pids for state in states):
+                break
+            if monotonic() >= final_deadline:
+                break
+            wait_for = min(0.05, max(0.0, final_deadline - monotonic()))
+            if wait_for <= 0:
+                break
+            sleep(wait_for)
 
-    survivors = [
-        pid
-        for group in group_list
-        for pid in _live_pids(
-            group,
-            proc_root=proc_root,
-            task_id=task_id,
-            board=board,
-            kanban_db=kanban_db,
-        )
+        survivors: set[int] = set()
+        for state in final_states.values():
+            survivors.update(state.live_pids)
+            survivors.update(state.uncertain_pids)
+        return signalled_pids, sorted(survivors), errors
+    finally:
+        _close_process_handles(handles, close_fn)
+
+
+
+def _reap_with_reservation(
+    detail: Mapping[str, Any],
+    *,
+    task_id: str,
+    board: str,
+    kanban_db: str | os.PathLike[str] | None,
+    reservation: Any,
+    refresh: Callable[[], Mapping[str, Any] | None] | None,
+    grace_seconds: float,
+    proc_root: Path,
+    current_pid: int,
+    unsafe: list[str],
+    sleep: Callable[[float], None],
+    monotonic: Callable[[], float],
+    pidfd_open: Callable[[int], int] | None,
+    pidfd_send_signal: Callable[[int, int], None] | None,
+    close_handle: Callable[[int], None] | None,
+) -> dict[str, Any]:
+    """Perform the final readback and cleanup while ``reservation`` is held."""
+
+    try:
+        reservation.assert_healthy()
+        latest = reservation.read_task(task_id)
+    except Exception as exc:
+        return {
+            "status": "unsafe",
+            "task_id": task_id,
+            "reason": f"board database reservation/readback failed: {exc}",
+        }
+    if latest is None:
+        return {
+            "status": "unsafe",
+            "task_id": task_id,
+            "reason": "task readback disappeared under board database reservation",
+        }
+    latest_reason = _terminal_reason_for_task(latest, task_id=task_id)
+    if latest_reason:
+        status = "skipped" if "identity" in latest_reason else "not_applicable"
+        return {"status": status, "task_id": task_id, "reason": latest_reason}
+
+    # Re-scan after the reserved task readback.  This catches a worker that
+    # ended naturally and establishes the exact member set for handle opening.
+    records = iter_process_records(proc_root=proc_root)
+    groups, unsafe_after_refresh = _validated_groups(
+        records,
+        task_id=task_id,
+        board=board,
+        kanban_db=kanban_db,
+        current_pid=current_pid,
+    )
+    unsafe.extend(unsafe_after_refresh)
+    if not groups:
+        result: dict[str, Any] = {"status": "none", "task_id": task_id}
+        if unsafe:
+            result.update({"status": "unsafe", "reason": "; ".join(unsafe[:3])})
+        return result
+
+    pids = sorted({pid for group in groups for pid in group.pids})
+    groups_payload = [group.pgrp for group in groups]
+    signalled, survivors, errors = _terminate_groups(
+        groups,
+        task_id=task_id,
+        board=board,
+        kanban_db=kanban_db,
+        proc_root=proc_root,
+        grace_seconds=grace_seconds,
+        sleep=sleep,
+        monotonic=monotonic,
+        refresh=refresh,
+        reservation=reservation,
+        pidfd_open=pidfd_open,
+        pidfd_send_signal=pidfd_send_signal,
+        close_handle=close_handle,
+    )
+    signalled_set = set(signalled)
+    signalled_groups = [
+        group.pgrp
+        for group in groups
+        if signalled_set.intersection(group.pids)
     ]
-    return term_sent + kill_sent, survivors, errors
-
+    all_errors = unsafe + errors
+    handle_unavailable = any(
+        "stable process handle" in reason for reason in errors
+    )
+    result = {
+        "status": (
+            "unsafe"
+            if handle_unavailable and not signalled and not survivors
+            else "reaped"
+            if not survivors and not all_errors
+            else "partial"
+        ),
+        "task_id": task_id,
+        "pids": pids,
+        "process_groups": groups_payload,
+        "signalled_groups": signalled_groups,
+        "signalled_pids": signalled,
+        "survivors": survivors,
+    }
+    if all_errors:
+        result["reason"] = "; ".join(all_errors[:3])
+    return result
 
 
 def reap_terminal_task_workers(
@@ -683,34 +1288,28 @@ def reap_terminal_task_workers(
     grace_seconds: float = 2.0,
     proc_root: Path = PROC_ROOT,
     current_pid: int | None = None,
-    killpg: Callable[[int, int], None] = os.killpg,
+    reservation: Any | None = None,
+    reservation_timeout_seconds: float = MAX_DB_RESERVATION_SECONDS,
+    pidfd_open: Callable[[int], int] | None = None,
+    pidfd_send_signal: Callable[[int, int], None] | None = None,
+    close_handle: Callable[[int], None] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, Any]:
-    """Reap only workers whose task is terminal and has no current run.
+    """Reap terminal workers only under exact task/database ownership.
 
-    ``refresh`` is called after the initial process scan and immediately before
-    signalling.  A task that is reclaimed or re-dispatched during the scan is
-    therefore left untouched.  The returned fields are deliberately bounded
-    and contain no command lines or arbitrary environment values.
+    Non-dry cleanup requires a bounded SQLite write reservation and Linux
+    pidfds.  There is deliberately no numeric process-group signalling path.
     """
 
     task_identity_reason = _canonical_identity_reason(task_id, label="task id")
     if task_identity_reason:
-        return {
-            "status": "skipped",
-            "task_id": task_id,
-            "reason": task_identity_reason,
-        }
+        return {"status": "skipped", "task_id": task_id, "reason": task_identity_reason}
     board_identity_reason = _canonical_identity_reason(
         board, label="board", allow_empty=True
     )
     if board_identity_reason:
-        return {
-            "status": "skipped",
-            "task_id": task_id,
-            "reason": board_identity_reason,
-        }
+        return {"status": "skipped", "task_id": task_id, "reason": board_identity_reason}
     validated_grace, grace_reason = _validated_grace_seconds(grace_seconds)
     if grace_reason:
         return {"status": "skipped", "task_id": task_id, "reason": grace_reason}
@@ -728,12 +1327,6 @@ def reap_terminal_task_workers(
             "task_id": task_id,
             "reason": "procfs is unavailable; no process-name fallback is permitted",
         }
-    if not dry_run and refresh is None:
-        return {
-            "status": "skipped",
-            "task_id": task_id,
-            "reason": "task refresh is required before cleanup",
-        }
 
     pid = current_pid if current_pid is not None else os.getpid()
     records = iter_process_records(proc_root=proc_root)
@@ -750,42 +1343,7 @@ def reap_terminal_task_workers(
             result.update({"status": "unsafe", "reason": "; ".join(unsafe[:3])})
         return result
 
-    try:
-        latest = refresh() if refresh is not None else detail
-    except Exception:
-        return {
-            "status": "skipped",
-            "task_id": task_id,
-            "reason": "task readback failed before cleanup",
-        }
-    if latest is None:
-        return {
-            "status": "skipped",
-            "task_id": task_id,
-            "reason": "task readback disappeared before cleanup",
-        }
-    latest_reason = _terminal_reason_for_task(latest, task_id=task_id)
-    if latest_reason:
-        return {"status": "skipped", "task_id": task_id, "reason": latest_reason}
-
-    # Re-scan after the task readback.  This closes the most important race and
-    # also drops a worker that ended naturally while the board was read.
-    records = iter_process_records(proc_root=proc_root)
-    groups, unsafe_after_refresh = _validated_groups(
-        records,
-        task_id=task_id,
-        board=board,
-        kanban_db=kanban_db,
-        current_pid=pid,
-    )
-    unsafe.extend(unsafe_after_refresh)
-    if not groups:
-        result = {"status": "none", "task_id": task_id}
-        if unsafe:
-            result.update({"status": "unsafe", "reason": "; ".join(unsafe[:3])})
-        return result
-
-    pids = sorted({pid for group in groups for pid in group.pids})
+    pids = sorted({member for group in groups for member in group.pids})
     groups_payload = [group.pgrp for group in groups]
     if dry_run:
         return {
@@ -795,27 +1353,61 @@ def reap_terminal_task_workers(
             "process_groups": groups_payload,
         }
 
-    assert refresh is not None
-    signalled, survivors, errors = _terminate_groups(
-        groups,
-        task_id=task_id,
-        board=board,
-        kanban_db=kanban_db,
-        proc_root=proc_root,
-        grace_seconds=grace_seconds,
-        killpg=killpg,
-        sleep=sleep,
-        monotonic=monotonic,
-        refresh=refresh,
-    )
-    result = {
-        "status": "reaped" if not survivors and not errors else "partial",
-        "task_id": task_id,
-        "pids": pids,
-        "process_groups": groups_payload,
-        "signalled_groups": signalled,
-        "survivors": survivors,
-    }
-    if errors or unsafe:
-        result["reason"] = "; ".join((unsafe + errors)[:3])
-    return result
+    if reservation is not None:
+        expected_path = _normalise_path(kanban_db)
+        actual_path = _normalise_path(getattr(reservation, "path", None))
+        if expected_path is not None and actual_path is not None and expected_path != actual_path:
+            return {
+                "status": "unsafe",
+                "task_id": task_id,
+                "reason": "board database reservation does not match resolved database",
+            }
+        return _reap_with_reservation(
+            detail,
+            task_id=task_id,
+            board=board,
+            kanban_db=kanban_db,
+            reservation=reservation,
+            refresh=refresh,
+            grace_seconds=grace_seconds,
+            proc_root=proc_root,
+            current_pid=pid,
+            unsafe=unsafe,
+            sleep=sleep,
+            monotonic=monotonic,
+            pidfd_open=pidfd_open,
+            pidfd_send_signal=pidfd_send_signal,
+            close_handle=close_handle,
+        )
+
+    if kanban_db is None:
+        return {
+            "status": "unsafe",
+            "task_id": task_id,
+            "reason": "exact board database is required for destructive cleanup",
+        }
+    try:
+        with SQLiteWriteReservation(
+            kanban_db,
+            task_id,
+            timeout_seconds=reservation_timeout_seconds,
+        ) as acquired:
+            return _reap_with_reservation(
+                detail,
+                task_id=task_id,
+                board=board,
+                kanban_db=kanban_db,
+                reservation=acquired,
+                refresh=refresh,
+                grace_seconds=grace_seconds,
+                proc_root=proc_root,
+                current_pid=pid,
+                unsafe=unsafe,
+                sleep=sleep,
+                monotonic=monotonic,
+                pidfd_open=pidfd_open,
+                pidfd_send_signal=pidfd_send_signal,
+                close_handle=close_handle,
+            )
+    except ReservationError as exc:
+        return {"status": "unsafe", "task_id": task_id, "reason": str(exc)}
