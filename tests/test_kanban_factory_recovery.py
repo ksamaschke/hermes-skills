@@ -275,6 +275,27 @@ def test_recover_runs_terminal_worker_reconciliation_for_blocked_tasks(monkeypat
     ]
 
 
+@pytest.mark.parametrize("raw_task_id", [" t ", 123, None, ""])
+def test_reconcile_rejects_noncanonical_id_before_canonical_lookup(
+    monkeypatch, raw_task_id
+):
+    task = {"id": raw_task_id, "status": "blocked"}
+    monkeypatch.setattr(
+        factory,
+        "_readonly_task_detail",
+        lambda *args, **kwargs: pytest.fail("malformed id reached task lookup"),
+    )
+    monkeypatch.setattr(
+        factory,
+        "_task_detail",
+        lambda *args, **kwargs: pytest.fail("malformed id reached CLI lookup"),
+    )
+
+    assert factory._reconcile_terminal_worker(
+        "factory-reaper-test", task, dry_run=False
+    ) is None
+
+
 def test_recovery_budget_applies_before_terminal_worker_scans(monkeypatch):
     task = {"id": "t_blocked", "status": "blocked"}
     monkeypatch.setattr(factory, "_json_command", lambda *args: [task])
@@ -470,6 +491,30 @@ def test_f1_reaper_rejects_missing_initial_task_identity(tmp_path):
 
     assert report["status"] == "skipped"
     assert "identity is missing" in report["reason"]
+    assert signals == []
+
+
+def test_reaper_rejects_empty_current_run_before_procfs(monkeypatch, tmp_path):
+    task_id = "t_empty_run_marker"
+    detail = _terminal_detail(task_id, current_run_id="")
+    monkeypatch.setattr(
+        reaper,
+        "iter_process_records",
+        lambda **kwargs: pytest.fail("empty run marker reached procfs"),
+    )
+    signals = []
+
+    report = reaper.reap_terminal_task_workers(
+        detail,
+        task_id=task_id,
+        board="factory-reaper-test",
+        proc_root=tmp_path,
+        refresh=lambda: detail,
+        killpg=lambda pgrp, signum: signals.append((pgrp, signum)),
+    )
+
+    assert report["status"] == "not_applicable"
+    assert "current run" in report["reason"]
     assert signals == []
 
 

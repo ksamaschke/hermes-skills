@@ -325,9 +325,15 @@ def _reconcile_terminal_worker(
 ) -> str | None:
     """Remove only a task-owned worker left behind after terminal handoff."""
 
-    task_id = str(task.get("id") or "").strip()
-    if not task_id or task.get("status") != "blocked":
+    raw_task_id = task.get("id")
+    if (
+        not isinstance(raw_task_id, str)
+        or not raw_task_id
+        or raw_task_id != raw_task_id.strip()
+        or task.get("status") != "blocked"
+    ):
         return None
+    task_id = raw_task_id
     # The reaper needs only the current status/run identity. Prefer the
     # query-only row so a locked/hung CLI cannot serialize every blocked task.
     detail = _readonly_task_detail(task_id, board) or _task_detail(board, task_id)

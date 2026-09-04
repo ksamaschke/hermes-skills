@@ -290,7 +290,7 @@ def _terminal_reason_for_task(
     if "current_run_id" not in row:
         return "task current run state is missing"
     current_run = row["current_run_id"]
-    if current_run not in (None, ""):
+    if current_run is not None:
         return "task still has a current run"
     return None
 
